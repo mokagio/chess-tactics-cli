@@ -252,32 +252,29 @@ fn print_help() {
 
 fn print_board(position: &Chess) {
     let board: &Board = position.board();
+    // Square colours (light, dark), chosen so both white and black pieces
+    // stay legible on either square.
+    let light = (152u8, 174, 196);
+    let dark = (95u8, 122, 150);
     for row in 0..8 {
         print!("  {}  ", 8 - row);
         for col in 0..8 {
             let idx = 64 - (row + 1) * 8 + col;
-            // dbg!(idx);
             let square = Square::new(idx);
-            // dbg!(square);
             let piece = board.piece_at(square);
-            let square_is_white = (row + col) % 2 == 0;
-            let c = if square_is_white { 140 } else { 80 };
-            let piece_char = piece
-                .map(|p: Piece| {
-                    let ch = piece_ascii(&p);
-                    let ch = if p.color == Color::White {
-                        ch.blue()
-                    } else {
-                        ch.red()
-                    };
-                    ch
-                })
-                .unwrap_or("·".to_string().truecolor(c, c, c));
-            if square_is_white {
-                print!("{} ", piece_char);
-            } else {
-                print!("{} ", piece_char);
+            let square_is_light = (row + col) % 2 == 0;
+            let (br, bg, bb) = if square_is_light { light } else { dark };
+            // A square is a uniform two-cell block: glyph (or blank) + trailing space.
+            let glyph = piece.map(|p| piece_unicode(&p)).unwrap_or(" ");
+            let mut cell = format!("{} ", glyph).on_truecolor(br, bg, bb);
+            if let Some(p) = piece {
+                cell = if p.color == Color::White {
+                    cell.truecolor(255, 255, 255).bold()
+                } else {
+                    cell.truecolor(18, 18, 18).bold()
+                };
             }
+            print!("{}", cell);
         }
         println!();
     }
@@ -309,27 +306,3 @@ fn piece_unicode(piece: &Piece) -> &'static str {
     }
 }
 
-fn piece_ascii(piece: &Piece) -> String {
-    if piece.role == Role::Pawn {
-        return match piece.color {
-            Color::Black => "▲",
-            Color::White => "▲",
-        }
-        .to_string();
-    }
-    return piece.char().to_uppercase().to_string();
-    // match (piece.role, piece.color) {
-    // (shakmaty::Role::Pawn, shakmaty::Color::Black) => {"♟︎"}
-    // (shakmaty::Role::Pawn, shakmaty::Color::White) => {"♟︎"}
-    // (shakmaty::Role::Knight, shakmaty::Color::Black) => {"♞"}
-    // (shakmaty::Role::Knight, shakmaty::Color::White) => {"♞"}
-    // (shakmaty::Role::Bishop, shakmaty::Color::Black) => {"♝"}
-    // (shakmaty::Role::Bishop, shakmaty::Color::White) => {"♝"}
-    // (shakmaty::Role::Rook, shakmaty::Color::Black) => {"♜"}
-    // (shakmaty::Role::Rook, shakmaty::Color::White) => {"♜"}
-    // (shakmaty::Role::Queen, shakmaty::Color::Black) => {"♛"}
-    // (shakmaty::Role::Queen, shakmaty::Color::White) => {"♛"}
-    // (shakmaty::Role::King, shakmaty::Color::Black) => {"♚"}
-    // (shakmaty::Role::King, shakmaty::Color::White) => {"♚"}
-    // }
-}
