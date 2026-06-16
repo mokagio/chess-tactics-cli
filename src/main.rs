@@ -411,4 +411,25 @@ mod tests {
             assert_eq!(piece_unicode(&piece), glyph);
         }
     }
+
+    #[test]
+    fn chess_tactic_deserializes_camel_case_fields() {
+        let json = r#"{
+            "id": "puzzle-1",
+            "moves": ["e2e4", "e7e5"],
+            "fen": "startpos",
+            "popularity": 91,
+            "tags": ["mateIn1"],
+            "gameLink": "https://example.test/game",
+            "rating": 1200,
+            "ratingDeviation": 75,
+            "numberPlays": 42
+        }"#;
+
+        let tactic: ChessTactic = serde_json::from_str(json).unwrap();
+
+        assert_eq!(tactic.game_link, "https://example.test/game");
+        assert_eq!(tactic.rating_deviation, 75);
+        assert_eq!(tactic.number_plays, 42);
+    }
 }
