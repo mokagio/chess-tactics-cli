@@ -364,4 +364,9 @@ mod tests {
     fn print_side_labels_white() {
         assert_eq!(print_side(&Color::White), "White");
     }
+
+    #[test]
+    fn print_side_labels_black() {
+        assert_eq!(print_side(&Color::Black), "Black");
+    }
 }
