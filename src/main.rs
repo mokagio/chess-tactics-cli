@@ -327,6 +327,12 @@ mod tests {
             env::remove_var(key);
             Self { key, original }
         }
+
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var_os(key);
+            env::set_var(key, value);
+            Self { key, original }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -344,5 +350,13 @@ mod tests {
         let _env = EnvVarGuard::remove("TACTICS_SERVER_URL");
 
         assert_eq!(get_api_endpoint(), "https://chessmadra.com/api/v1/tactic");
+    }
+
+    #[test]
+    fn configured_api_endpoint_uses_tactics_server_url() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::set("TACTICS_SERVER_URL", "http://localhost:3000");
+
+        assert_eq!(get_api_endpoint(), "http://localhost:3000/api/v1/tactic");
     }
 }
