@@ -369,4 +369,12 @@ mod tests {
     fn print_side_labels_black() {
         assert_eq!(print_side(&Color::Black), "Black");
     }
+
+    #[test]
+    fn prompt_names_white_to_move() {
+        assert_eq!(
+            get_prompt(&Chess::default()),
+            "White to move, enter the best move, or '?' for help: "
+        );
+    }
 }
