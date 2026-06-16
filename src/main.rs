@@ -1,8 +1,6 @@
 use std::env;
 #[macro_use]
 extern crate anyhow;
-#[macro_use]
-extern crate prettytable;
 
 use anyhow::Context;
 use clap::{AppSettings, Parser};
@@ -238,23 +236,18 @@ fn get_prompt(position: &Chess) -> String {
 }
 
 fn print_help() {
-    ptable!(
-        [
-            "Any move, ex. Qxd7",
-            "Attempt to solve the tactic with the given move."
-        ],
-        [
-            "No input",
-            "Reveal the answer, and continue the tactic if there are more moves."
-        ],
-        [
-            "'f' or 'fen'",
-            "Print out the current board, in FEN notation."
-        ],
-        ["'s' or 'show'", "Show the current board."],
-        ["'r' or 'rating'", "Show the rating of the current tactic."],
-        ["'?' or 'help'", "Display this help."]
-    );
+    let rows = [
+        ("Any move, ex. Qxd7", "Attempt to solve the tactic with the given move."),
+        ("No input", "Reveal the answer, and continue the tactic if there are more moves."),
+        ("'f' or 'fen'", "Print out the current board, in FEN notation."),
+        ("'s' or 'show'", "Show the current board."),
+        ("'r' or 'rating'", "Show the rating of the current tactic."),
+        ("'?' or 'help'", "Display this help."),
+    ];
+    let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    for (key, desc) in rows {
+        println!("  {:<width$}  {}", key, desc, width = width);
+    }
 }
 
 fn print_board(position: &Chess) {
