@@ -306,3 +306,43 @@ fn piece_unicode(piece: &Piece) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::env;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn remove(key: &'static str) -> Self {
+            let original = env::var_os(key);
+            env::remove_var(key);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn default_api_endpoint_uses_chessmadra() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::remove("TACTICS_SERVER_URL");
+
+        assert_eq!(get_api_endpoint(), "https://chessmadra.com/api/v1/tactic");
+    }
+}
