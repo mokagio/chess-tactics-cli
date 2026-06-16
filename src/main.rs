@@ -389,4 +389,26 @@ mod tests {
             "Black to move, enter the best move, or '?' for help: "
         );
     }
+
+    #[test]
+    fn piece_unicode_returns_role_glyphs() {
+        let cases = [
+            (Piece { role: Role::Pawn, color: Color::White }, "♟︎"),
+            (Piece { role: Role::Knight, color: Color::White }, "♞"),
+            (Piece { role: Role::Bishop, color: Color::White }, "♝"),
+            (Piece { role: Role::Rook, color: Color::White }, "♜"),
+            (Piece { role: Role::Queen, color: Color::White }, "♛"),
+            (Piece { role: Role::King, color: Color::White }, "♚"),
+            (Piece { role: Role::Pawn, color: Color::Black }, "♟︎"),
+            (Piece { role: Role::Knight, color: Color::Black }, "♞"),
+            (Piece { role: Role::Bishop, color: Color::Black }, "♝"),
+            (Piece { role: Role::Rook, color: Color::Black }, "♜"),
+            (Piece { role: Role::Queen, color: Color::Black }, "♛"),
+            (Piece { role: Role::King, color: Color::Black }, "♚"),
+        ];
+
+        for (piece, glyph) in cases {
+            assert_eq!(piece_unicode(&piece), glyph);
+        }
+    }
 }
