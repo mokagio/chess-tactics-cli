@@ -359,4 +359,9 @@ mod tests {
 
         assert_eq!(get_api_endpoint(), "http://localhost:3000/api/v1/tactic");
     }
+
+    #[test]
+    fn print_side_labels_white() {
+        assert_eq!(print_side(&Color::White), "White");
+    }
 }
