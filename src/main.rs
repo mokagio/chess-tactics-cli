@@ -45,13 +45,12 @@ async fn main() -> Result<()> {
                             s.parse::<i32>()
                                 .expect(&format!("Failed to parse {} as a rating", s))
                         };
-                        (Some(parse_rating(first)), Some(parse_rating(second)));
+                        (Some(parse_rating(first)), Some(parse_rating(second)))
                     }
                     _ => {
                         panic!("Could not parse rating, make sure it's in the form '500-1200'")
                     }
-                };
-                (Some(0), Some(0))
+                }
             }
             None => (None, None),
         }
