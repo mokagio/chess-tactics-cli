@@ -179,6 +179,7 @@ fn get_prompt_response(position: &Chess) -> PromptResponse {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ChessTactic {
     pub id: String,
     pub moves: Vec<String>,
