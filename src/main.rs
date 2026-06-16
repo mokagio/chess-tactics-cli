@@ -377,4 +377,16 @@ mod tests {
             "White to move, enter the best move, or '?' for help: "
         );
     }
+
+    #[test]
+    fn prompt_names_black_to_move() {
+        let position = Chess::default();
+        let white_move = "e2e4".parse::<Uci>().unwrap().to_move(&position).unwrap();
+        let position = position.play(&white_move).unwrap();
+
+        assert_eq!(
+            get_prompt(&position),
+            "Black to move, enter the best move, or '?' for help: "
+        );
+    }
 }
