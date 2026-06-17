@@ -46,6 +46,11 @@ Or specify a rating range:
 tactics-trainer --rating=600-1200
 ```
 
+To keep fetching new puzzles after each solved tactic:
+```sh
+scripts/tactics-forever --rating=600-1200 --tag mateIn1
+```
+
 <!-- ROADMAP -->
 ## Roadmap
 
