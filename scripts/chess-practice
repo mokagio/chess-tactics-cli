@@ -10,6 +10,7 @@ Fetch a new puzzle after each solved tactic.
 All options are forwarded to tactics-trainer.
 The wrapper also accepts --tag as an alias for --tags.
 With no options, it defaults to --rating=600-1200.
+If tactics-trainer is not installed, it falls back to cargo run.
 
 Examples:
   scripts/chess-practice --rating=600-1200
@@ -17,7 +18,14 @@ Examples:
 EOF
 }
 
-trainer_bin=${TACTICS_TRAINER_BIN:-tactics-trainer}
+if [[ -n "${TACTICS_TRAINER_BIN:-}" ]]; then
+  trainer_cmd=("$TACTICS_TRAINER_BIN")
+elif command -v tactics-trainer >/dev/null 2>&1; then
+  trainer_cmd=(tactics-trainer)
+else
+  trainer_cmd=(cargo run --quiet --bin tactics-trainer --)
+fi
+
 args=()
 
 if (($# == 0)); then
@@ -49,5 +57,5 @@ while (($#)); do
 done
 
 while true; do
-  "$trainer_bin" "${args[@]}"
+  "${trainer_cmd[@]}" "${args[@]}"
 done

@@ -38,6 +38,24 @@ EOF
   [ "$(cat "$args_file")" = "--rating=600-1200" ]
 }
 
+@test "falls back to cargo run when tactics trainer is not installed" {
+  unset TACTICS_TRAINER_BIN
+  bin_dir="$BATS_TEST_TMPDIR/bin"
+  mkdir "$bin_dir"
+
+  cat >"$bin_dir/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$TACTICS_TRAINER_ARGS_FILE"
+exit 64
+EOF
+  chmod +x "$bin_dir/cargo"
+
+  PATH="$bin_dir:/usr/bin:/bin" run "$wrapper"
+
+  [ "$status" -eq 64 ]
+  [ "$(cat "$args_file")" = $'run\n--quiet\n--bin\ntactics-trainer\n--\n--rating=600-1200' ]
+}
+
 @test "rejects singular tag option without a value" {
   run "$wrapper" --tag
 
