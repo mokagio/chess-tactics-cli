@@ -9,6 +9,7 @@ Usage: scripts/chess-practice [tactics-trainer options]
 Fetch a new puzzle after each solved tactic.
 All options are forwarded to tactics-trainer.
 The wrapper also accepts --tag as an alias for --tags.
+With no options, it defaults to --rating=600-1200.
 
 Examples:
   scripts/chess-practice --rating=600-1200
@@ -18,6 +19,10 @@ EOF
 
 trainer_bin=${TACTICS_TRAINER_BIN:-tactics-trainer}
 args=()
+
+if (($# == 0)); then
+  args+=(--rating=600-1200)
+fi
 
 while (($#)); do
   case "$1" in

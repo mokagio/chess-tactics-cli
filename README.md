@@ -50,6 +50,7 @@ To keep fetching new puzzles after each solved tactic:
 ```sh
 scripts/chess-practice --rating=600-1200 --tag mateIn1
 ```
+Running `scripts/chess-practice` without options defaults to `--rating=600-1200`.
 
 <!-- ROADMAP -->
 ## Roadmap

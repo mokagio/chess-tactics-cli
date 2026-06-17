@@ -31,6 +31,13 @@ EOF
   [ "$(cat "$args_file")" = $'--rating=600-1200\n--tags\nmateIn1' ]
 }
 
+@test "defaults to beginner rating range with no options" {
+  run "$wrapper"
+
+  [ "$status" -eq 64 ]
+  [ "$(cat "$args_file")" = "--rating=600-1200" ]
+}
+
 @test "rejects singular tag option without a value" {
   run "$wrapper" --tag
 
