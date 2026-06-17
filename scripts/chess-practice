@@ -4,15 +4,15 @@ set -euo pipefail
 
 show_help() {
   cat <<'EOF'
-Usage: scripts/tactics-forever [tactics-trainer options]
+Usage: scripts/chess-practice [tactics-trainer options]
 
 Fetch a new puzzle after each solved tactic.
 All options are forwarded to tactics-trainer.
 The wrapper also accepts --tag as an alias for --tags.
 
 Examples:
-  scripts/tactics-forever --rating=600-1200
-  scripts/tactics-forever --tag mateIn1
+  scripts/chess-practice --rating=600-1200
+  scripts/chess-practice --tag mateIn1
 EOF
 }
 
@@ -27,7 +27,7 @@ while (($#)); do
       ;;
     --tag)
       if (($# == 1)); then
-        echo "scripts/tactics-forever: --tag requires a value" >&2
+        echo "scripts/chess-practice: --tag requires a value" >&2
         exit 64
       fi
       args+=(--tags "$2")

@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
-  wrapper="$BATS_TEST_DIRNAME/../scripts/tactics-forever"
+  wrapper="$BATS_TEST_DIRNAME/../scripts/chess-practice"
   args_file="$BATS_TEST_TMPDIR/args"
   trainer="$BATS_TEST_TMPDIR/tactics-trainer"
 
@@ -20,7 +20,7 @@ EOF
   run "$wrapper" --help
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Usage: scripts/tactics-forever"* ]]
+  [[ "$output" == *"Usage: scripts/chess-practice"* ]]
   [ ! -e "$args_file" ]
 }
 
