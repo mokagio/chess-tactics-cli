@@ -1,23 +1,18 @@
 use std::env;
-#[macro_use]
-extern crate anyhow;
 
-use anyhow::Context;
-use clap::{AppSettings, Parser};
+use anyhow::Result;
+use clap::Parser;
 use colored::*;
 use serde::{Deserialize, Serialize};
 use shakmaty::{
     fen::{self, Fen},
-    san::{self, San},
+    san::San,
     uci::Uci,
-    Board, CastlingMode, Chess, Color, Move, Piece, Position, Role, Setup, Square,
+    Board, CastlingMode, Chess, Color, Piece, Position, Setup, Square,
 };
-
-use anyhow::Result;
 
 #[derive(Parser, Debug)]
 #[clap(version = "1.0", author = "Marcus B. <me@mbuffett.com>")]
-#[clap(setting = AppSettings::ColoredHelp)]
 struct Args {
     #[clap(short, long)]
     /// The rating range of the tactics to fetch. Try 0-1200 for easy, 1200-1800 for
@@ -115,7 +110,6 @@ async fn main() -> Result<()> {
             }
         }
         let reply = san_move.to_move(&position).unwrap();
-        let old_position = position.clone();
         position = position.play(&reply).unwrap();
         let response = continuation_moves.next();
         match response {
@@ -237,9 +231,18 @@ fn get_prompt(position: &Chess) -> String {
 
 fn print_help() {
     let rows = [
-        ("Any move, ex. Qxd7", "Attempt to solve the tactic with the given move."),
-        ("No input", "Reveal the answer, and continue the tactic if there are more moves."),
-        ("'f' or 'fen'", "Print out the current board, in FEN notation."),
+        (
+            "Any move, ex. Qxd7",
+            "Attempt to solve the tactic with the given move.",
+        ),
+        (
+            "No input",
+            "Reveal the answer, and continue the tactic if there are more moves.",
+        ),
+        (
+            "'f' or 'fen'",
+            "Print out the current board, in FEN notation.",
+        ),
         ("'s' or 'show'", "Show the current board."),
         ("'r' or 'rating'", "Show the rating of the current tactic."),
         ("'?' or 'help'", "Display this help."),
@@ -310,6 +313,7 @@ fn piece_unicode(piece: &Piece) -> &'static str {
 mod tests {
     use super::*;
 
+    use shakmaty::Role;
     use std::env;
     use std::ffi::OsString;
     use std::sync::Mutex;
@@ -393,18 +397,90 @@ mod tests {
     #[test]
     fn piece_unicode_returns_role_glyphs() {
         let cases = [
-            (Piece { role: Role::Pawn, color: Color::White }, "♟︎"),
-            (Piece { role: Role::Knight, color: Color::White }, "♞"),
-            (Piece { role: Role::Bishop, color: Color::White }, "♝"),
-            (Piece { role: Role::Rook, color: Color::White }, "♜"),
-            (Piece { role: Role::Queen, color: Color::White }, "♛"),
-            (Piece { role: Role::King, color: Color::White }, "♚"),
-            (Piece { role: Role::Pawn, color: Color::Black }, "♟︎"),
-            (Piece { role: Role::Knight, color: Color::Black }, "♞"),
-            (Piece { role: Role::Bishop, color: Color::Black }, "♝"),
-            (Piece { role: Role::Rook, color: Color::Black }, "♜"),
-            (Piece { role: Role::Queen, color: Color::Black }, "♛"),
-            (Piece { role: Role::King, color: Color::Black }, "♚"),
+            (
+                Piece {
+                    role: Role::Pawn,
+                    color: Color::White,
+                },
+                "♟︎",
+            ),
+            (
+                Piece {
+                    role: Role::Knight,
+                    color: Color::White,
+                },
+                "♞",
+            ),
+            (
+                Piece {
+                    role: Role::Bishop,
+                    color: Color::White,
+                },
+                "♝",
+            ),
+            (
+                Piece {
+                    role: Role::Rook,
+                    color: Color::White,
+                },
+                "♜",
+            ),
+            (
+                Piece {
+                    role: Role::Queen,
+                    color: Color::White,
+                },
+                "♛",
+            ),
+            (
+                Piece {
+                    role: Role::King,
+                    color: Color::White,
+                },
+                "♚",
+            ),
+            (
+                Piece {
+                    role: Role::Pawn,
+                    color: Color::Black,
+                },
+                "♟︎",
+            ),
+            (
+                Piece {
+                    role: Role::Knight,
+                    color: Color::Black,
+                },
+                "♞",
+            ),
+            (
+                Piece {
+                    role: Role::Bishop,
+                    color: Color::Black,
+                },
+                "♝",
+            ),
+            (
+                Piece {
+                    role: Role::Rook,
+                    color: Color::Black,
+                },
+                "♜",
+            ),
+            (
+                Piece {
+                    role: Role::Queen,
+                    color: Color::Black,
+                },
+                "♛",
+            ),
+            (
+                Piece {
+                    role: Role::King,
+                    color: Color::Black,
+                },
+                "♚",
+            ),
         ];
 
         for (piece, glyph) in cases {
