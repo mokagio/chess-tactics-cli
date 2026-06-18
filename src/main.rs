@@ -213,7 +213,10 @@ fn get_api_endpoint() -> String {
 }
 
 fn puzzle_reference(tactic: &ChessTactic) -> String {
-    return format!("Puzzle {}: {}", tactic.id, tactic.game_link);
+    return format!(
+        "Puzzle ID: {}\nPuzzle URL: https://lichess.org/training/{}\nGame URL: {}",
+        tactic.id, tactic.id, tactic.game_link
+    );
 }
 
 fn print_side(side: &Color) -> String {
@@ -529,7 +532,7 @@ mod tests {
 
         assert_eq!(
             puzzle_reference(&tactic),
-            "Puzzle puzzle-1: https://example.test/game"
+            "Puzzle ID: puzzle-1\nPuzzle URL: https://lichess.org/training/puzzle-1\nGame URL: https://example.test/game"
         );
     }
 }
