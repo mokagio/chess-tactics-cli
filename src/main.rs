@@ -53,8 +53,8 @@ async fn main() -> Result<()> {
         rating_lte: rating_upper_bound,
         tags: opts.tags,
     })
-    .await
-    .expect("Failed to get a new tactic from the server, exiting.");
+    .await?;
+    println!("{}", puzzle_reference(&tactic));
     let fen = tactic.fen;
     // let fen = "r6k/pp2r2p/4Rp1Q/3p4/8/1N1P2R1/PqP2bPP/7K b - - 0 24";
     let moves = tactic.moves;
@@ -210,6 +210,10 @@ fn get_api_endpoint() -> String {
         "{}/api/v1/tactic",
         env::var("TACTICS_SERVER_URL").unwrap_or("https://chessmadra.com".to_string())
     );
+}
+
+fn puzzle_reference(tactic: &ChessTactic) -> String {
+    return format!("Puzzle {}: {}", tactic.id, tactic.game_link);
 }
 
 fn print_side(side: &Color) -> String {
@@ -507,5 +511,25 @@ mod tests {
         assert_eq!(tactic.game_link, "https://example.test/game");
         assert_eq!(tactic.rating_deviation, 75);
         assert_eq!(tactic.number_plays, 42);
+    }
+
+    #[test]
+    fn puzzle_reference_includes_id_and_game_link() {
+        let tactic = ChessTactic {
+            id: "puzzle-1".to_string(),
+            moves: vec![],
+            fen: "startpos".to_string(),
+            popularity: 91,
+            tags: vec!["mateIn1".to_string()],
+            game_link: "https://example.test/game".to_string(),
+            rating: 1200,
+            rating_deviation: 75,
+            number_plays: 42,
+        };
+
+        assert_eq!(
+            puzzle_reference(&tactic),
+            "Puzzle puzzle-1: https://example.test/game"
+        );
     }
 }

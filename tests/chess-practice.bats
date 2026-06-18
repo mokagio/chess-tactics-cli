@@ -14,6 +14,7 @@ EOF
 
   export TACTICS_TRAINER_ARGS_FILE="$args_file"
   export TACTICS_TRAINER_BIN="$trainer"
+  export CHESS_PRACTICE_ONCE=1
 }
 
 @test "shows wrapper help without invoking tactics trainer" {
@@ -54,6 +55,31 @@ EOF
 
   [ "$status" -eq 64 ]
   [ "$(cat "$args_file")" = $'run\n--quiet\n--bin\ntactics-trainer\n--\n--rating=600-1200' ]
+}
+
+@test "continues after tactics trainer exits with an error" {
+  unset CHESS_PRACTICE_ONCE
+  export CHESS_PRACTICE_MAX_RUNS=2
+  export CHESS_PRACTICE_RETRY_DELAY=0
+  attempts_file="$BATS_TEST_TMPDIR/attempts"
+
+  cat >"$trainer" <<'EOF'
+#!/usr/bin/env bash
+attempts=$(cat "$TACTICS_TRAINER_ATTEMPTS_FILE" 2>/dev/null || true)
+attempts=${attempts:-0}
+attempts=$((attempts + 1))
+printf '%s\n' "$attempts" >"$TACTICS_TRAINER_ATTEMPTS_FILE"
+exit 64
+EOF
+  chmod +x "$trainer"
+
+  export TACTICS_TRAINER_ATTEMPTS_FILE="$attempts_file"
+
+  run "$wrapper"
+
+  [ "$status" -eq 64 ]
+  [ "$(cat "$attempts_file")" = "2" ]
+  [[ "$output" == *"tactics-trainer exited with status 64; retrying"* ]]
 }
 
 @test "rejects singular tag option without a value" {

@@ -11,6 +11,7 @@ All options are forwarded to tactics-trainer.
 The wrapper also accepts --tag as an alias for --tags.
 With no options, it defaults to --rating=600-1200.
 If tactics-trainer is not installed, it falls back to cargo run.
+Failed fetches are reported and retried.
 
 Examples:
   scripts/chess-practice --rating=600-1200
@@ -27,6 +28,9 @@ else
 fi
 
 args=()
+run_count=0
+max_runs=${CHESS_PRACTICE_MAX_RUNS:-}
+retry_delay=${CHESS_PRACTICE_RETRY_DELAY:-1}
 
 if (($# == 0)); then
   args+=(--rating=600-1200)
@@ -57,5 +61,20 @@ while (($#)); do
 done
 
 while true; do
-  "${trainer_cmd[@]}" "${args[@]}"
+  status=0
+  "${trainer_cmd[@]}" "${args[@]}" || status=$?
+  run_count=$((run_count + 1))
+
+  if [[ "${CHESS_PRACTICE_ONCE:-}" == "1" ]]; then
+    exit "$status"
+  fi
+
+  if [[ -n "$max_runs" ]] && ((run_count >= max_runs)); then
+    exit "$status"
+  fi
+
+  if ((status != 0)); then
+    echo "scripts/chess-practice: tactics-trainer exited with status $status; retrying..." >&2
+    sleep "$retry_delay"
+  fi
 done

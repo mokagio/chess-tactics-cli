@@ -52,6 +52,7 @@ scripts/chess-practice --rating=600-1200 --tag mateIn1
 ```
 Running `scripts/chess-practice` without options defaults to `--rating=600-1200`.
 From a checkout, it falls back to `cargo run` if `tactics-trainer` is not installed.
+Each puzzle prints its id and game link before the board.
 
 <!-- ROADMAP -->
 ## Roadmap
