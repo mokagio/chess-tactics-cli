@@ -48,10 +48,14 @@ tactics-trainer --rating=600-1200
 
 To keep fetching new puzzles after each solved tactic:
 ```sh
-scripts/chess-practice --rating=600-1200 --tag mateIn1
+chess-practice --rating=600-1200 --tag mateIn1
 ```
-Running `scripts/chess-practice` without options defaults to `--rating=600-1200`.
-From a checkout, it builds the local Cargo binary once so committed changes show up immediately.
+From a checkout, run it with Cargo:
+```sh
+cargo run --bin chess-practice -- --tag mateIn1
+```
+The `scripts/chess-practice` checkout shim calls the Rust command.
+When no `--rating` is supplied, `chess-practice` starts from `--rating=600-1200` and calibrates that range from recent entries in the practice log.
 Each puzzle prints its Lichess training URL before the board.
 The screen is cleared before each new puzzle.
 Completed puzzles are logged to `~/.chess-practice/puzzles.jsonl` with puzzle id, rating, and correctness.

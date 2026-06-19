@@ -1,11 +1,13 @@
 use std::{
-    env,
+    env, fmt,
     fs::{self, OpenOptions},
-    io::Write,
+    future::Future,
+    io::{self, BufRead, Write},
     path::PathBuf,
+    time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -29,34 +31,120 @@ pub struct TrainerArgs {
     pub tags: Vec<String>,
 }
 
+#[derive(Parser, Clone, Debug)]
+#[clap(version = "1.0", author = "Marcus B. <me@mbuffett.com>")]
+pub struct PracticeArgs {
+    #[clap(short, long)]
+    /// The rating range to start from. If omitted, chess-practice calibrates from the practice log.
+    pub rating: Option<String>,
+    #[clap(short, long)]
+    /// Optionally specify a list of tags to get tactics for. Every tactic returned will have one
+    /// of these tags
+    pub tags: Vec<String>,
+    #[clap(long = "tag", value_name = "TAG")]
+    /// Alias for --tags.
+    pub tag_aliases: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RatingRange {
+    pub lower: i32,
+    pub upper: i32,
+}
+
+impl RatingRange {
+    const MIN: i32 = 0;
+    const MAX: i32 = 3000;
+
+    fn parse(input: &str) -> Result<Self> {
+        let (lower, upper) = input.split_once('-').ok_or_else(|| {
+            anyhow!("Could not parse rating, make sure it's in the form '500-1200'")
+        })?;
+        let lower = lower
+            .parse::<i32>()
+            .map_err(|_| anyhow!("Failed to parse {} as a rating", lower))?;
+        let upper = upper
+            .parse::<i32>()
+            .map_err(|_| anyhow!("Failed to parse {} as a rating", upper))?;
+
+        return Ok(Self { lower, upper });
+    }
+
+    fn width(&self) -> i32 {
+        return self.upper - self.lower;
+    }
+
+    fn with_center(&self, center: i32) -> Self {
+        let width = self.width();
+        let mut lower = center - width / 2;
+        let mut upper = lower + width;
+
+        if lower < Self::MIN {
+            lower = Self::MIN;
+            upper = lower + width;
+        }
+
+        if upper > Self::MAX {
+            upper = Self::MAX;
+            lower = upper - width;
+        }
+
+        return Self { lower, upper };
+    }
+}
+
+impl fmt::Display for RatingRange {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        return write!(formatter, "{}-{}", self.lower, self.upper);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PracticeConfig {
+    trainer_args: TrainerArgs,
+    calibrate_rating: bool,
+    default_rating_range: RatingRange,
+    once: bool,
+    max_runs: Option<usize>,
+    retry_delay: Duration,
+    clear_screen: bool,
+}
+
+impl PracticeConfig {
+    pub fn from_args(args: PracticeArgs) -> Result<Self> {
+        let mut tags = args.tags;
+        tags.extend(args.tag_aliases);
+
+        return Ok(Self {
+            calibrate_rating: args.rating.is_none(),
+            trainer_args: TrainerArgs {
+                rating: args.rating,
+                tags,
+            },
+            default_rating_range: RatingRange {
+                lower: 600,
+                upper: 1200,
+            },
+            once: env_flag("CHESS_PRACTICE_ONCE"),
+            max_runs: env_usize("CHESS_PRACTICE_MAX_RUNS")?,
+            retry_delay: Duration::from_secs(env_u64("CHESS_PRACTICE_RETRY_DELAY")?.unwrap_or(1)),
+            clear_screen: !env_flag("CHESS_PRACTICE_NO_CLEAR"),
+        });
+    }
+
+    fn trainer_args_for_attempts(&self, attempts: &[PuzzleAttempt]) -> TrainerArgs {
+        let mut args = self.trainer_args.clone();
+        if self.calibrate_rating {
+            args.rating =
+                Some(calibrate_rating_range(self.default_rating_range, attempts).to_string());
+        }
+        return args;
+    }
+}
+
 pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
     // dbg!(&opts);
-    let (rating_lower_bound, rating_upper_bound): (Option<i32>, Option<i32>) = {
-        match opts.rating {
-            Some(rating) => {
-                let parts = rating.split("-").collect::<Vec<&str>>();
-                match (parts.get(0), parts.get(1)) {
-                    (Some(first), Some(second)) => {
-                        let parse_rating = |s: &str| -> i32 {
-                            s.parse::<i32>()
-                                .expect(&format!("Failed to parse {} as a rating", s))
-                        };
-                        (Some(parse_rating(first)), Some(parse_rating(second)))
-                    }
-                    _ => {
-                        panic!("Could not parse rating, make sure it's in the form '500-1200'")
-                    }
-                }
-            }
-            None => (None, None),
-        }
-    };
-    let tactic = get_new_puzzle(ChessTacticRequest {
-        rating_gte: rating_lower_bound,
-        rating_lte: rating_upper_bound,
-        tags: opts.tags,
-    })
-    .await?;
+    let tactic = get_new_puzzle(tactic_request(&opts)?).await?;
     println!("{}", puzzle_reference(&tactic));
     let fen = tactic.fen.clone();
     // let fen = "r6k/pp2r2p/4Rp1Q/3p4/8/1N1P2R1/PqP2bPP/7K b - - 0 24";
@@ -201,11 +289,118 @@ struct ChessTacticRequest {
     tags: Vec<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize, Debug)]
 struct PuzzleAttempt {
     puzzle_id: String,
     rating: i32,
     correct: bool,
+}
+
+fn tactic_request(args: &TrainerArgs) -> Result<ChessTacticRequest> {
+    let rating_range = args.rating.as_deref().map(RatingRange::parse).transpose()?;
+
+    return Ok(ChessTacticRequest {
+        rating_gte: rating_range.map(|range| range.lower),
+        rating_lte: rating_range.map(|range| range.upper),
+        tags: args.tags.clone(),
+    });
+}
+
+pub async fn run_practice_loop(args: PracticeArgs) -> Result<i32> {
+    let config = PracticeConfig::from_args(args)?;
+    let mut stderr = io::stderr();
+
+    return run_practice_loop_with_hooks(
+        config,
+        |trainer_args| run_single_puzzle(trainer_args),
+        clear_practice_screen,
+        || read_puzzle_attempts(&puzzle_log_path()),
+        std::thread::sleep,
+        &mut stderr,
+    )
+    .await;
+}
+
+async fn run_practice_loop_with_hooks<Run, Fut, Clear, ReadAttempts, Sleep>(
+    config: PracticeConfig,
+    mut run_once: Run,
+    mut clear_screen: Clear,
+    mut read_attempts: ReadAttempts,
+    mut sleep: Sleep,
+    stderr: &mut dyn Write,
+) -> Result<i32>
+where
+    Run: FnMut(TrainerArgs) -> Fut,
+    Fut: Future<Output = Result<()>>,
+    Clear: FnMut() -> Result<()>,
+    ReadAttempts: FnMut() -> Result<Vec<PuzzleAttempt>>,
+    Sleep: FnMut(Duration),
+{
+    let mut run_count = 0;
+
+    loop {
+        let attempts = read_attempts()?;
+        let trainer_args = config.trainer_args_for_attempts(&attempts);
+
+        if config.clear_screen {
+            clear_screen()?;
+        }
+
+        let result = run_once(trainer_args).await;
+        run_count += 1;
+
+        let should_stop = config.once
+            || config
+                .max_runs
+                .map(|max_runs| run_count >= max_runs)
+                .unwrap_or(false);
+
+        match result {
+            Ok(()) => {
+                if should_stop {
+                    return Ok(0);
+                }
+            }
+            Err(error) => {
+                if should_stop {
+                    writeln!(stderr, "chess-practice: puzzle run failed: {}", error)?;
+                    return Ok(1);
+                }
+
+                writeln!(
+                    stderr,
+                    "chess-practice: puzzle run failed: {}; retrying...",
+                    error
+                )?;
+                sleep(config.retry_delay);
+            }
+        }
+    }
+}
+
+fn calibrate_rating_range(base: RatingRange, attempts: &[PuzzleAttempt]) -> RatingRange {
+    const WINDOW_SIZE: usize = 10;
+    const MIN_ATTEMPTS: usize = 3;
+    const STEP: i32 = 100;
+
+    let recent = attempts.iter().rev().take(WINDOW_SIZE).collect::<Vec<_>>();
+    if recent.len() < MIN_ATTEMPTS {
+        return base;
+    }
+
+    let correct_count = recent.iter().filter(|attempt| attempt.correct).count();
+    let accuracy = correct_count as f32 / recent.len() as f32;
+    let rating_sum = recent.iter().map(|attempt| attempt.rating).sum::<i32>();
+    let average_rating = (rating_sum as f32 / recent.len() as f32).round() as i32;
+    let center = if accuracy >= 0.70 {
+        average_rating + STEP
+    } else if accuracy <= 0.40 {
+        average_rating - STEP
+    } else {
+        average_rating
+    };
+
+    return base.with_center(center);
 }
 
 async fn get_new_puzzle(request: ChessTacticRequest) -> Result<ChessTactic> {
@@ -262,6 +457,60 @@ fn log_puzzle_attempt(attempt: &PuzzleAttempt) -> Result<()> {
     serde_json::to_writer(&mut file, attempt)?;
     writeln!(file)?;
     return Ok(());
+}
+
+fn read_puzzle_attempts(path: &PathBuf) -> Result<Vec<PuzzleAttempt>> {
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+
+    let file = fs::File::open(path)?;
+    let reader = io::BufReader::new(file);
+    let mut attempts = vec![];
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        attempts.push(serde_json::from_str(&line)?);
+    }
+
+    return Ok(attempts);
+}
+
+fn clear_practice_screen() -> Result<()> {
+    print!("\x1B[2J\x1B[H");
+    io::stdout().flush()?;
+    return Ok(());
+}
+
+fn env_flag(key: &str) -> bool {
+    return env::var(key).map(|value| value == "1").unwrap_or(false);
+}
+
+fn env_usize(key: &str) -> Result<Option<usize>> {
+    return env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| anyhow!("Failed to parse {} as a number", key))
+        })
+        .transpose();
+}
+
+fn env_u64(key: &str) -> Result<Option<u64>> {
+    return env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| anyhow!("Failed to parse {} as a number", key))
+        })
+        .transpose();
 }
 
 fn print_side(side: &Color) -> String {
@@ -370,7 +619,7 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -422,6 +671,44 @@ mod tests {
             std::process::id(),
             name
         ));
+    }
+
+    fn sample_attempt(rating: i32, correct: bool) -> PuzzleAttempt {
+        return PuzzleAttempt {
+            puzzle_id: format!("puzzle-{}", rating),
+            rating,
+            correct,
+        };
+    }
+
+    fn practice_args(
+        rating: Option<&str>,
+        tags: Vec<&str>,
+        tag_aliases: Vec<&str>,
+    ) -> PracticeArgs {
+        return PracticeArgs {
+            rating: rating.map(String::from),
+            tags: tags.into_iter().map(String::from).collect(),
+            tag_aliases: tag_aliases.into_iter().map(String::from).collect(),
+        };
+    }
+
+    fn test_practice_config(max_runs: usize, clear_screen: bool) -> PracticeConfig {
+        return PracticeConfig {
+            trainer_args: TrainerArgs {
+                rating: None,
+                tags: vec![],
+            },
+            calibrate_rating: true,
+            default_rating_range: RatingRange {
+                lower: 600,
+                upper: 1200,
+            },
+            once: false,
+            max_runs: Some(max_runs),
+            retry_delay: Duration::from_secs(0),
+            clear_screen,
+        };
     }
 
     #[test]
@@ -619,5 +906,228 @@ mod tests {
         );
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn practice_config_defaults_to_beginner_rating_range() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _once = EnvVarGuard::remove("CHESS_PRACTICE_ONCE");
+        let _max_runs = EnvVarGuard::remove("CHESS_PRACTICE_MAX_RUNS");
+        let _retry_delay = EnvVarGuard::remove("CHESS_PRACTICE_RETRY_DELAY");
+        let _no_clear = EnvVarGuard::remove("CHESS_PRACTICE_NO_CLEAR");
+
+        let config = PracticeConfig::from_args(practice_args(None, vec![], vec![])).unwrap();
+
+        assert_eq!(
+            config.trainer_args_for_attempts(&[]).rating.unwrap(),
+            "600-1200"
+        );
+    }
+
+    #[test]
+    fn practice_config_combines_tags_and_tag_aliases() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _once = EnvVarGuard::remove("CHESS_PRACTICE_ONCE");
+        let _max_runs = EnvVarGuard::remove("CHESS_PRACTICE_MAX_RUNS");
+        let _retry_delay = EnvVarGuard::remove("CHESS_PRACTICE_RETRY_DELAY");
+        let _no_clear = EnvVarGuard::remove("CHESS_PRACTICE_NO_CLEAR");
+
+        let config =
+            PracticeConfig::from_args(practice_args(None, vec!["fork"], vec!["mateIn1"])).unwrap();
+
+        assert_eq!(
+            config.trainer_args_for_attempts(&[]).tags,
+            vec!["fork".to_string(), "mateIn1".to_string()]
+        );
+    }
+
+    #[test]
+    fn practice_config_preserves_explicit_rating() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _once = EnvVarGuard::remove("CHESS_PRACTICE_ONCE");
+        let _max_runs = EnvVarGuard::remove("CHESS_PRACTICE_MAX_RUNS");
+        let _retry_delay = EnvVarGuard::remove("CHESS_PRACTICE_RETRY_DELAY");
+        let _no_clear = EnvVarGuard::remove("CHESS_PRACTICE_NO_CLEAR");
+        let attempts = vec![
+            sample_attempt(900, true),
+            sample_attempt(900, true),
+            sample_attempt(900, true),
+        ];
+
+        let config =
+            PracticeConfig::from_args(practice_args(Some("1400-1800"), vec![], vec![])).unwrap();
+
+        assert_eq!(
+            config.trainer_args_for_attempts(&attempts).rating.unwrap(),
+            "1400-1800"
+        );
+    }
+
+    #[test]
+    fn calibration_steps_up_after_recent_successes() {
+        let base = RatingRange {
+            lower: 600,
+            upper: 1200,
+        };
+        let attempts = vec![
+            sample_attempt(900, true),
+            sample_attempt(900, true),
+            sample_attempt(900, true),
+        ];
+
+        assert_eq!(
+            calibrate_rating_range(base, &attempts),
+            RatingRange {
+                lower: 700,
+                upper: 1300
+            }
+        );
+    }
+
+    #[test]
+    fn calibration_steps_down_after_recent_misses() {
+        let base = RatingRange {
+            lower: 600,
+            upper: 1200,
+        };
+        let attempts = vec![
+            sample_attempt(900, false),
+            sample_attempt(900, false),
+            sample_attempt(900, false),
+        ];
+
+        assert_eq!(
+            calibrate_rating_range(base, &attempts),
+            RatingRange {
+                lower: 500,
+                upper: 1100
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn practice_loop_reloads_attempts_between_runs() {
+        let run_args = Arc::new(Mutex::new(Vec::<TrainerArgs>::new()));
+        let read_count = Arc::new(Mutex::new(0usize));
+        let mut stderr = Vec::new();
+        let attempts = vec![
+            sample_attempt(900, true),
+            sample_attempt(900, true),
+            sample_attempt(900, true),
+        ];
+
+        let exit_code = run_practice_loop_with_hooks(
+            test_practice_config(2, false),
+            {
+                let run_args = Arc::clone(&run_args);
+                move |args| {
+                    run_args.lock().unwrap().push(args);
+                    async { Ok(()) }
+                }
+            },
+            || Ok(()),
+            {
+                let read_count = Arc::clone(&read_count);
+                move || {
+                    let mut read_count = read_count.lock().unwrap();
+                    *read_count += 1;
+                    if *read_count == 1 {
+                        return Ok(vec![]);
+                    }
+
+                    return Ok(attempts.clone());
+                }
+            },
+            |_| {},
+            &mut stderr,
+        )
+        .await
+        .unwrap();
+
+        let ratings = run_args
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|args| args.rating.clone().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            ratings,
+            vec!["600-1200".to_string(), "700-1300".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn practice_loop_clears_before_each_run() {
+        let events = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut stderr = Vec::new();
+
+        run_practice_loop_with_hooks(
+            test_practice_config(2, true),
+            {
+                let events = Arc::clone(&events);
+                move |_| {
+                    events.lock().unwrap().push("run".to_string());
+                    async { Ok(()) }
+                }
+            },
+            {
+                let events = Arc::clone(&events);
+                move || {
+                    events.lock().unwrap().push("clear".to_string());
+                    Ok(())
+                }
+            },
+            || Ok(vec![]),
+            |_| {},
+            &mut stderr,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                "clear".to_string(),
+                "run".to_string(),
+                "clear".to_string(),
+                "run".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn practice_loop_continues_after_failure() {
+        let run_count = Arc::new(Mutex::new(0usize));
+        let mut stderr = Vec::new();
+
+        let exit_code = run_practice_loop_with_hooks(
+            test_practice_config(2, false),
+            {
+                let run_count = Arc::clone(&run_count);
+                move |_| {
+                    let run_count = Arc::clone(&run_count);
+                    async move {
+                        let mut run_count = run_count.lock().unwrap();
+                        *run_count += 1;
+                        if *run_count == 1 {
+                            return Err(anyhow::anyhow!("fetch failed"));
+                        }
+
+                        return Ok(());
+                    }
+                }
+            },
+            || Ok(()),
+            || Ok(vec![]),
+            |_| {},
+            &mut stderr,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(*run_count.lock().unwrap(), 2);
+        assert!(String::from_utf8(stderr).unwrap().contains("retrying"));
     }
 }

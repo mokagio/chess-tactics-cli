@@ -25,3 +25,7 @@ clap = {version = "3.0.1", features = ["derive"]}
 [[bin]]
 name = "tactics-trainer"
 path = "src/bin/tactics-trainer.rs"
+
+[[bin]]
+name = "chess-practice"
+path = "src/bin/chess-practice.rs"
