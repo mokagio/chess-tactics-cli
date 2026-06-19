@@ -55,6 +55,7 @@ From a checkout, it builds the local Cargo binary once so committed changes show
 Each puzzle prints its Lichess training URL before the board.
 The screen is cleared before each new puzzle.
 Completed puzzles are logged to `~/.chess-practice/puzzles.jsonl` with puzzle id, rating, and correctness.
+A move with incorrect syntax is logged as incorrect, even if the intended move was right.
 Set `CHESS_PRACTICE_LOG` to use a different log file.
 
 <!-- ROADMAP -->
