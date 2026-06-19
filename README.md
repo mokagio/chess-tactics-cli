@@ -53,6 +53,7 @@ scripts/chess-practice --rating=600-1200 --tag mateIn1
 Running `scripts/chess-practice` without options defaults to `--rating=600-1200`.
 From a checkout, it builds the local Cargo binary once so committed changes show up immediately.
 Each puzzle prints its Lichess training URL before the board.
+The screen is cleared before each new puzzle.
 
 <!-- ROADMAP -->
 ## Roadmap

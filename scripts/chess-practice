@@ -12,6 +12,7 @@ The wrapper also accepts --tag as an alias for --tags.
 With no options, it defaults to --rating=600-1200.
 From a checkout, it builds and runs the local Cargo binary.
 Failed fetches are reported and retried.
+The screen is cleared before each puzzle.
 
 Examples:
   scripts/chess-practice --rating=600-1200
@@ -21,6 +22,14 @@ EOF
 
 script_dir=$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")
 repo_root=$(dirname -- "$script_dir")
+
+clear_screen() {
+  if [[ "${CHESS_PRACTICE_NO_CLEAR:-}" == "1" ]]; then
+    return
+  fi
+
+  clear 2>/dev/null || true
+}
 
 if [[ -n "${TACTICS_TRAINER_BIN:-}" ]]; then
   trainer_cmd=("$TACTICS_TRAINER_BIN")
@@ -69,6 +78,7 @@ done
 
 while true; do
   status=0
+  clear_screen
   "${trainer_cmd[@]}" "${args[@]}" || status=$?
   run_count=$((run_count + 1))
 

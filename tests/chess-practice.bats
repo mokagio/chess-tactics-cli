@@ -16,6 +16,7 @@ EOF
   export TACTICS_TRAINER_ARGS_FILE="$args_file"
   export TACTICS_TRAINER_BIN="$trainer"
   export CHESS_PRACTICE_ONCE=1
+  export CHESS_PRACTICE_NO_CLEAR=1
 }
 
 @test "shows wrapper help without invoking tactics trainer" {
@@ -38,6 +39,33 @@ EOF
 
   [ "$status" -eq 64 ]
   [ "$(cat "$args_file")" = "--rating=600-1200" ]
+}
+
+@test "clears the screen before running tactics trainer" {
+  unset CHESS_PRACTICE_NO_CLEAR
+  bin_dir="$BATS_TEST_TMPDIR/bin"
+  order_file="$BATS_TEST_TMPDIR/order"
+  mkdir "$bin_dir"
+
+  cat >"$bin_dir/clear" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' clear >>"$TACTICS_TRAINER_ORDER_FILE"
+EOF
+  chmod +x "$bin_dir/clear"
+
+  cat >"$trainer" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' trainer >>"$TACTICS_TRAINER_ORDER_FILE"
+exit 64
+EOF
+  chmod +x "$trainer"
+
+  export TACTICS_TRAINER_ORDER_FILE="$order_file"
+
+  PATH="$bin_dir:/usr/bin:/bin" run "$wrapper"
+
+  [ "$status" -eq 64 ]
+  [ "$(cat "$order_file")" = $'clear\ntrainer' ]
 }
 
 @test "builds the checkout binary once before installed tactics trainer" {
