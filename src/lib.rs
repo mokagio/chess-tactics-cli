@@ -16,22 +16,20 @@ use shakmaty::{
     Board, CastlingMode, Chess, Color, Piece, Position, Setup, Square,
 };
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[clap(version = "1.0", author = "Marcus B. <me@mbuffett.com>")]
-struct Args {
+pub struct TrainerArgs {
     #[clap(short, long)]
     /// The rating range of the tactics to fetch. Try 0-1200 for easy, 1200-1800 for
     /// intermediate, or 1800-3000 for difficult tactics.
-    rating: Option<String>,
+    pub rating: Option<String>,
     #[clap(short, long)]
     /// Optionally specify a list of tags to get tactics for. Every tactic returned will have one
     /// of these tags
-    tags: Vec<String>,
+    pub tags: Vec<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let opts = Args::parse();
+pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
     // dbg!(&opts);
     let (rating_lower_bound, rating_upper_bound): (Option<i32>, Option<i32>) = {
         match opts.rating {

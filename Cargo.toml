@@ -24,4 +24,4 @@ clap = {version = "3.0.1", features = ["derive"]}
 
 [[bin]]
 name = "tactics-trainer"
-path = "src/main.rs"
+path = "src/bin/tactics-trainer.rs"
