@@ -1,4 +1,9 @@
-use std::env;
+use std::{
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+};
 
 use anyhow::Result;
 use clap::Parser;
@@ -55,9 +60,9 @@ async fn main() -> Result<()> {
     })
     .await?;
     println!("{}", puzzle_reference(&tactic));
-    let fen = tactic.fen;
+    let fen = tactic.fen.clone();
     // let fen = "r6k/pp2r2p/4Rp1Q/3p4/8/1N1P2R1/PqP2bPP/7K b - - 0 24";
-    let moves = tactic.moves;
+    let moves = tactic.moves.clone();
     let setup: Fen = fen.parse()?;
     let mut position: Chess = setup.position(CastlingMode::Standard)?;
     let mut continuation_moves = moves.iter().map(|m| -> Uci { m.parse().unwrap() });
@@ -75,6 +80,7 @@ async fn main() -> Result<()> {
         .unwrap()
         .to_move(&position)
         .unwrap();
+    let mut solved_correctly = true;
     loop {
         println!();
         let san_move = San::from_move(&position, &next_move);
@@ -95,7 +101,9 @@ async fn main() -> Result<()> {
                 println!("{}", fen::epd(&position).to_string());
                 continue;
             }
-            PromptResponse::NoResponse => {}
+            PromptResponse::NoResponse => {
+                solved_correctly = false;
+            }
             PromptResponse::ShowRating => {
                 println!("This tactic is rated {}.", tactic.rating);
                 continue;
@@ -104,6 +112,7 @@ async fn main() -> Result<()> {
                 if move_input == san_move.to_string() {
                     correct = true;
                 } else {
+                    solved_correctly = false;
                     println!("{} is not the correct move", move_input);
                     continue;
                 }
@@ -141,6 +150,9 @@ async fn main() -> Result<()> {
                     "".to_string()
                 };
                 println!("{}Completed this tactic.", prefix);
+                if let Err(error) = log_puzzle_attempt(&puzzle_attempt(&tactic, solved_correctly)) {
+                    eprintln!("Failed to log puzzle attempt: {}", error);
+                }
                 break;
             }
         };
@@ -191,6 +203,13 @@ struct ChessTacticRequest {
     tags: Vec<String>,
 }
 
+#[derive(Serialize, Debug)]
+struct PuzzleAttempt {
+    puzzle_id: String,
+    rating: i32,
+    correct: bool,
+}
+
 async fn get_new_puzzle(request: ChessTacticRequest) -> Result<ChessTactic> {
     let client = reqwest::Client::new();
     let tactic: ChessTactic = client
@@ -214,6 +233,37 @@ fn get_api_endpoint() -> String {
 
 fn puzzle_reference(tactic: &ChessTactic) -> String {
     return format!("Puzzle URL: https://lichess.org/training/{}", tactic.id);
+}
+
+fn puzzle_attempt(tactic: &ChessTactic, correct: bool) -> PuzzleAttempt {
+    return PuzzleAttempt {
+        puzzle_id: tactic.id.clone(),
+        rating: tactic.rating,
+        correct,
+    };
+}
+
+fn puzzle_log_path() -> PathBuf {
+    if let Some(path) = env::var_os("CHESS_PRACTICE_LOG") {
+        return PathBuf::from(path);
+    }
+
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    return home.join(".chess-practice").join("puzzles.jsonl");
+}
+
+fn log_puzzle_attempt(attempt: &PuzzleAttempt) -> Result<()> {
+    let path = puzzle_log_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    serde_json::to_writer(&mut file, attempt)?;
+    writeln!(file)?;
+    return Ok(());
 }
 
 fn print_side(side: &Color) -> String {
@@ -320,6 +370,8 @@ mod tests {
     use shakmaty::Role;
     use std::env;
     use std::ffi::OsString;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -350,6 +402,28 @@ mod tests {
                 None => env::remove_var(self.key),
             }
         }
+    }
+
+    fn sample_tactic() -> ChessTactic {
+        return ChessTactic {
+            id: "puzzle-1".to_string(),
+            moves: vec![],
+            fen: "startpos".to_string(),
+            popularity: 91,
+            tags: vec!["mateIn1".to_string()],
+            game_link: "https://example.test/game".to_string(),
+            rating: 1200,
+            rating_deviation: 75,
+            number_plays: 42,
+        };
+    }
+
+    fn temp_log_path(name: &str) -> PathBuf {
+        return env::temp_dir().join(format!(
+            "tactics-trainer-{}-{}.jsonl",
+            std::process::id(),
+            name
+        ));
     }
 
     #[test]
@@ -515,21 +589,37 @@ mod tests {
 
     #[test]
     fn puzzle_reference_includes_puzzle_url() {
-        let tactic = ChessTactic {
-            id: "puzzle-1".to_string(),
-            moves: vec![],
-            fen: "startpos".to_string(),
-            popularity: 91,
-            tags: vec!["mateIn1".to_string()],
-            game_link: "https://example.test/game".to_string(),
-            rating: 1200,
-            rating_deviation: 75,
-            number_plays: 42,
-        };
+        let tactic = sample_tactic();
 
         assert_eq!(
             puzzle_reference(&tactic),
             "Puzzle URL: https://lichess.org/training/puzzle-1"
         );
+    }
+
+    #[test]
+    fn puzzle_attempt_captures_id_rating_and_result() {
+        let attempt = puzzle_attempt(&sample_tactic(), true);
+
+        assert_eq!(attempt.puzzle_id, "puzzle-1");
+        assert_eq!(attempt.rating, 1200);
+        assert!(attempt.correct);
+    }
+
+    #[test]
+    fn log_puzzle_attempt_appends_json_line() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let path = temp_log_path("attempt");
+        let _ = fs::remove_file(&path);
+        let _env = EnvVarGuard::set("CHESS_PRACTICE_LOG", path.to_str().unwrap());
+
+        log_puzzle_attempt(&puzzle_attempt(&sample_tactic(), false)).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\"puzzle_id\":\"puzzle-1\",\"rating\":1200,\"correct\":false}\n"
+        );
+
+        fs::remove_file(path).unwrap();
     }
 }
