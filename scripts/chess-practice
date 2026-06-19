@@ -10,7 +10,7 @@ Fetch a new puzzle after each solved tactic.
 All options are forwarded to tactics-trainer.
 The wrapper also accepts --tag as an alias for --tags.
 With no options, it defaults to --rating=600-1200.
-If tactics-trainer is not installed, it falls back to cargo run.
+From a checkout, it runs the local Cargo binary.
 Failed fetches are reported and retried.
 
 Examples:
@@ -19,8 +19,13 @@ Examples:
 EOF
 }
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "$script_dir/.." && pwd)
+
 if [[ -n "${TACTICS_TRAINER_BIN:-}" ]]; then
   trainer_cmd=("$TACTICS_TRAINER_BIN")
+elif [[ -f "$repo_root/Cargo.toml" ]]; then
+  trainer_cmd=(cargo run --quiet --manifest-path "$repo_root/Cargo.toml" --bin tactics-trainer --)
 elif command -v tactics-trainer >/dev/null 2>&1; then
   trainer_cmd=(tactics-trainer)
 else

@@ -39,7 +39,7 @@ EOF
   [ "$(cat "$args_file")" = "--rating=600-1200" ]
 }
 
-@test "falls back to cargo run when tactics trainer is not installed" {
+@test "uses the checkout cargo binary before installed tactics trainer" {
   unset TACTICS_TRAINER_BIN
   bin_dir="$BATS_TEST_TMPDIR/bin"
   mkdir "$bin_dir"
@@ -51,10 +51,24 @@ exit 64
 EOF
   chmod +x "$bin_dir/cargo"
 
+  cat >"$bin_dir/tactics-trainer" <<'EOF'
+#!/usr/bin/env bash
+exit 65
+EOF
+  chmod +x "$bin_dir/tactics-trainer"
+
   PATH="$bin_dir:/usr/bin:/bin" run "$wrapper"
 
   [ "$status" -eq 64 ]
-  [ "$(cat "$args_file")" = $'run\n--quiet\n--bin\ntactics-trainer\n--\n--rating=600-1200' ]
+  repo_root=$(cd -- "$BATS_TEST_DIRNAME/.." && pwd)
+  [ "$(cat "$args_file")" = "run
+--quiet
+--manifest-path
+$repo_root/Cargo.toml
+--bin
+tactics-trainer
+--
+--rating=600-1200" ]
 }
 
 @test "continues after tactics trainer exits with an error" {
