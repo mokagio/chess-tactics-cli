@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031
 
 setup() {
   wrapper="$BATS_TEST_DIRNAME/../scripts/chess-practice"
@@ -39,15 +40,22 @@ EOF
   [ "$(cat "$args_file")" = "--rating=600-1200" ]
 }
 
-@test "uses the checkout cargo binary before installed tactics trainer" {
+@test "builds the checkout binary once before installed tactics trainer" {
   unset TACTICS_TRAINER_BIN
   bin_dir="$BATS_TEST_TMPDIR/bin"
+  cargo_args_file="$BATS_TEST_TMPDIR/cargo-args"
   mkdir "$bin_dir"
 
   cat >"$bin_dir/cargo" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$@" >"$TACTICS_TRAINER_CARGO_ARGS_FILE"
+mkdir -p "$CARGO_TARGET_DIR/debug"
+cat >"$CARGO_TARGET_DIR/debug/tactics-trainer" <<'INNER_EOF'
+#!/usr/bin/env bash
 printf '%s\n' "$@" >"$TACTICS_TRAINER_ARGS_FILE"
 exit 64
+INNER_EOF
+chmod +x "$CARGO_TARGET_DIR/debug/tactics-trainer"
 EOF
   chmod +x "$bin_dir/cargo"
 
@@ -57,18 +65,58 @@ exit 65
 EOF
   chmod +x "$bin_dir/tactics-trainer"
 
+  export CARGO_TARGET_DIR="$BATS_TEST_TMPDIR/target"
+  export TACTICS_TRAINER_CARGO_ARGS_FILE="$cargo_args_file"
+
   PATH="$bin_dir:/usr/bin:/bin" run "$wrapper"
 
   [ "$status" -eq 64 ]
   repo_root=$(cd -- "$BATS_TEST_DIRNAME/.." && pwd)
-  [ "$(cat "$args_file")" = "run
+  [ "$(cat "$cargo_args_file")" = "build
 --quiet
 --manifest-path
 $repo_root/Cargo.toml
 --bin
-tactics-trainer
---
---rating=600-1200" ]
+tactics-trainer" ]
+  [ "$(cat "$args_file")" = "--rating=600-1200" ]
+}
+
+@test "reuses the checkout binary across practice attempts" {
+  unset TACTICS_TRAINER_BIN
+  unset CHESS_PRACTICE_ONCE
+  bin_dir="$BATS_TEST_TMPDIR/bin"
+  cargo_args_file="$BATS_TEST_TMPDIR/cargo-args"
+  attempts_file="$BATS_TEST_TMPDIR/attempts"
+  mkdir "$bin_dir"
+
+  cat >"$bin_dir/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >>"$TACTICS_TRAINER_CARGO_ARGS_FILE"
+mkdir -p "$CARGO_TARGET_DIR/debug"
+cat >"$CARGO_TARGET_DIR/debug/tactics-trainer" <<'INNER_EOF'
+#!/usr/bin/env bash
+attempts=$(cat "$TACTICS_TRAINER_ATTEMPTS_FILE" 2>/dev/null || true)
+attempts=${attempts:-0}
+attempts=$((attempts + 1))
+printf '%s\n' "$attempts" >"$TACTICS_TRAINER_ATTEMPTS_FILE"
+exit 64
+INNER_EOF
+chmod +x "$CARGO_TARGET_DIR/debug/tactics-trainer"
+EOF
+  chmod +x "$bin_dir/cargo"
+
+  export CARGO_TARGET_DIR="$BATS_TEST_TMPDIR/target"
+  export CHESS_PRACTICE_MAX_RUNS=2
+  export CHESS_PRACTICE_RETRY_DELAY=0
+  export TACTICS_TRAINER_ATTEMPTS_FILE="$attempts_file"
+  export TACTICS_TRAINER_CARGO_ARGS_FILE="$cargo_args_file"
+
+  PATH="$bin_dir:/usr/bin:/bin" run "$wrapper"
+
+  [ "$status" -eq 64 ]
+  [ "$(cat "$attempts_file")" = "2" ]
+  [ "$(wc -l <"$cargo_args_file" | tr -d ' ')" = "6" ]
+  [ "$(cat "$args_file" 2>/dev/null || true)" = "" ]
 }
 
 @test "continues after tactics trainer exits with an error" {

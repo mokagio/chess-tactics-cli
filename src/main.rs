@@ -213,10 +213,7 @@ fn get_api_endpoint() -> String {
 }
 
 fn puzzle_reference(tactic: &ChessTactic) -> String {
-    return format!(
-        "Puzzle ID: {}\nPuzzle URL: https://lichess.org/training/{}\nGame URL: {}",
-        tactic.id, tactic.id, tactic.game_link
-    );
+    return format!("Puzzle URL: https://lichess.org/training/{}", tactic.id);
 }
 
 fn print_side(side: &Color) -> String {
@@ -517,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn puzzle_reference_includes_id_and_game_link() {
+    fn puzzle_reference_includes_puzzle_url() {
         let tactic = ChessTactic {
             id: "puzzle-1".to_string(),
             moves: vec![],
@@ -532,7 +529,7 @@ mod tests {
 
         assert_eq!(
             puzzle_reference(&tactic),
-            "Puzzle ID: puzzle-1\nPuzzle URL: https://lichess.org/training/puzzle-1\nGame URL: https://example.test/game"
+            "Puzzle URL: https://lichess.org/training/puzzle-1"
         );
     }
 }

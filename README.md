@@ -51,8 +51,8 @@ To keep fetching new puzzles after each solved tactic:
 scripts/chess-practice --rating=600-1200 --tag mateIn1
 ```
 Running `scripts/chess-practice` without options defaults to `--rating=600-1200`.
-From a checkout, it runs the local Cargo binary so committed changes show up immediately.
-Each puzzle prints its id, Lichess training URL, and game link before the board.
+From a checkout, it builds the local Cargo binary once so committed changes show up immediately.
+Each puzzle prints its Lichess training URL before the board.
 
 <!-- ROADMAP -->
 ## Roadmap
