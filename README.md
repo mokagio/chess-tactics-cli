@@ -58,7 +58,7 @@ The `scripts/chess-practice` checkout shim calls the Rust command.
 When no `--rating` is supplied, `chess-practice` starts from `--rating=600-1200` and calibrates that range from recent entries in the practice log.
 Each puzzle prints its Lichess training URL before the board.
 The screen is cleared before each new puzzle.
-Completed puzzles are logged to `~/.chess-practice/puzzles.jsonl` with puzzle id, rating, and correctness.
+Completed puzzles are logged to `~/.chess-practice/puzzles.jsonl` with puzzle id, rating, Unix timestamp, and correctness.
 A move with incorrect syntax is logged as incorrect, even if the intended move was right.
 Set `CHESS_PRACTICE_LOG` to use a different log file.
 

@@ -4,7 +4,7 @@ use std::{
     future::Future,
     io::{self, BufRead, Write},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Result};
@@ -293,6 +293,8 @@ struct ChessTacticRequest {
 struct PuzzleAttempt {
     puzzle_id: String,
     rating: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp: Option<u64>,
     correct: bool,
 }
 
@@ -429,11 +431,23 @@ fn puzzle_reference(tactic: &ChessTactic) -> String {
 }
 
 fn puzzle_attempt(tactic: &ChessTactic, correct: bool) -> PuzzleAttempt {
+    return puzzle_attempt_at(tactic, correct, current_unix_timestamp());
+}
+
+fn puzzle_attempt_at(tactic: &ChessTactic, correct: bool, timestamp: u64) -> PuzzleAttempt {
     return PuzzleAttempt {
         puzzle_id: tactic.id.clone(),
         rating: tactic.rating,
+        timestamp: Some(timestamp),
         correct,
     };
+}
+
+fn current_unix_timestamp() -> u64 {
+    return SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time is before Unix epoch")
+        .as_secs();
 }
 
 fn puzzle_log_path() -> PathBuf {
@@ -677,6 +691,7 @@ mod tests {
         return PuzzleAttempt {
             puzzle_id: format!("puzzle-{}", rating),
             rating,
+            timestamp: Some(1_719_000_000),
             correct,
         };
     }
@@ -888,6 +903,7 @@ mod tests {
 
         assert_eq!(attempt.puzzle_id, "puzzle-1");
         assert_eq!(attempt.rating, 1200);
+        assert!(attempt.timestamp.is_some());
         assert!(attempt.correct);
     }
 
@@ -898,13 +914,29 @@ mod tests {
         let _ = fs::remove_file(&path);
         let _env = EnvVarGuard::set("CHESS_PRACTICE_LOG", path.to_str().unwrap());
 
-        log_puzzle_attempt(&puzzle_attempt(&sample_tactic(), false)).unwrap();
+        log_puzzle_attempt(&puzzle_attempt_at(&sample_tactic(), false, 1_719_000_000)).unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            "{\"puzzle_id\":\"puzzle-1\",\"rating\":1200,\"correct\":false}\n"
+            "{\"puzzle_id\":\"puzzle-1\",\"rating\":1200,\"timestamp\":1719000000,\"correct\":false}\n"
         );
 
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_puzzle_attempts_accepts_old_log_lines() {
+        let path = temp_log_path("old-attempt");
+        let _ = fs::remove_file(&path);
+        fs::write(
+            &path,
+            "{\"puzzle_id\":\"puzzle-1\",\"rating\":1200,\"correct\":true}\n",
+        )
+        .unwrap();
+
+        let attempts = read_puzzle_attempts(&path).unwrap();
+
+        assert_eq!(attempts[0].timestamp, None);
         fs::remove_file(path).unwrap();
     }
 
