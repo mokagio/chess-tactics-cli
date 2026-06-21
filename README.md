@@ -62,6 +62,102 @@ Completed puzzles are logged to `~/.chess-practice/puzzles.jsonl` with puzzle id
 A move with incorrect syntax is logged as incorrect, even if the intended move was right.
 Set `CHESS_PRACTICE_LOG` to use a different log file.
 
+## Puzzle API
+
+Puzzles are fetched with `POST https://chessmadra.com/api/v1/tactic`.
+Set `TACTICS_SERVER_URL` to override the host; the path remains `/api/v1/tactic`.
+
+The request body is JSON:
+
+```json
+{
+  "ratingGte": 600,
+  "ratingLte": 1200,
+  "tags": ["mateIn1"]
+}
+```
+
+The tag ids come from the Lichess puzzle theme source:
+`https://raw.githubusercontent.com/lichess-org/lila/master/translation/source/puzzleTheme.xml`.
+
+Available tag ids:
+
+```text
+advancedPawn
+advantage
+anastasiaMate
+arabianMate
+attackingF2F7
+attraction
+backRankMate
+balestraMate
+blindSwineMate
+bishopEndgame
+bodenMate
+castling
+capturingDefender
+clearance
+collinearMove
+cornerMate
+crushing
+defensiveMove
+deflection
+discoveredAttack
+discoveredCheck
+doubleBishopMate
+doubleCheck
+dovetailMate
+endgame
+enPassant
+epauletteMate
+equality
+exposedKing
+fork
+hangingPiece
+hookMate
+interference
+intermezzo
+killBoxMate
+kingsideAttack
+knightEndgame
+long
+master
+masterVsMaster
+mate
+mateIn1
+mateIn2
+mateIn3
+mateIn4
+mateIn5
+middlegame
+morphysMate
+oneMove
+opening
+operaMate
+pawnEndgame
+pillsburysMate
+pin
+promotion
+queenEndgame
+queenRookEndgame
+queensideAttack
+quietMove
+rookEndgame
+sacrifice
+short
+skewer
+smotheredMate
+superGM
+swallowstailMate
+trappedPiece
+triangleMate
+underPromotion
+veryLong
+vukovicMate
+xRayAttack
+zugzwang
+```
+
 <!-- ROADMAP -->
 ## Roadmap
 
