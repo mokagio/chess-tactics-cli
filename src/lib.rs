@@ -295,6 +295,8 @@ struct PuzzleAttempt {
     rating: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     timestamp: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
     correct: bool,
 }
 
@@ -439,6 +441,7 @@ fn puzzle_attempt_at(tactic: &ChessTactic, correct: bool, timestamp: u64) -> Puz
         puzzle_id: tactic.id.clone(),
         rating: tactic.rating,
         timestamp: Some(timestamp),
+        tags: tactic.tags.clone(),
         correct,
     };
 }
@@ -692,6 +695,7 @@ mod tests {
             puzzle_id: format!("puzzle-{}", rating),
             rating,
             timestamp: Some(1_719_000_000),
+            tags: vec![],
             correct,
         };
     }
@@ -904,6 +908,7 @@ mod tests {
         assert_eq!(attempt.puzzle_id, "puzzle-1");
         assert_eq!(attempt.rating, 1200);
         assert!(attempt.timestamp.is_some());
+        assert_eq!(attempt.tags, vec!["mateIn1".to_string()]);
         assert!(attempt.correct);
     }
 
@@ -918,7 +923,7 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            "{\"puzzle_id\":\"puzzle-1\",\"rating\":1200,\"timestamp\":1719000000,\"correct\":false}\n"
+            "{\"puzzle_id\":\"puzzle-1\",\"rating\":1200,\"timestamp\":1719000000,\"tags\":[\"mateIn1\"],\"correct\":false}\n"
         );
 
         fs::remove_file(path).unwrap();
@@ -937,6 +942,7 @@ mod tests {
         let attempts = read_puzzle_attempts(&path).unwrap();
 
         assert_eq!(attempts[0].timestamp, None);
+        assert_eq!(attempts[0].tags, Vec::<String>::new());
         fs::remove_file(path).unwrap();
     }
 
