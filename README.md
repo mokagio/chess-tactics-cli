@@ -71,8 +71,8 @@ The request body is JSON:
 
 ```json
 {
-  "ratingGte": 600,
-  "ratingLte": 1200,
+  "rating_gte": 600,
+  "rating_lte": 1200,
   "tags": ["mateIn1"]
 }
 ```
@@ -157,6 +157,12 @@ vukovicMate
 xRayAttack
 zugzwang
 ```
+
+## Known Issues
+
+Chess Madra currently appears to honor `rating_gte` and `rating_lte`, but not `tags`.
+A 2026-06-22 sample of 15 beginner requests for `pin` and 15 for `skewer` returned no puzzles with the requested tag.
+Use the logged `tags` field to audit what was actually served.
 
 <!-- ROADMAP -->
 ## Roadmap
