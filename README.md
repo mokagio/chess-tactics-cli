@@ -45,6 +45,10 @@ Or specify a rating range:
 ```sh
 tactics-trainer --rating=600-1200
 ```
+Or replay a specific Lichess puzzle:
+```sh
+tactics-trainer --id zZG03
+```
 
 To keep fetching new puzzles after each solved tactic:
 ```sh
@@ -66,6 +70,8 @@ Set `CHESS_PRACTICE_LOG` to use a different log file.
 
 Puzzles are fetched with `POST https://chessmadra.com/api/v1/tactic`.
 Set `TACTICS_SERVER_URL` to override the host; the path remains `/api/v1/tactic`.
+Specific puzzle IDs are fetched with `GET https://lichess.org/api/puzzle/{id}`.
+Set `LICHESS_SERVER_URL` to override the host; the path remains `/api/puzzle/{id}`.
 
 The request body is JSON:
 

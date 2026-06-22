@@ -1,4 +1,5 @@
 use std::{
+    convert::{TryFrom, TryInto},
     env, fmt,
     fs::{self, OpenOptions},
     future::Future,
@@ -29,6 +30,9 @@ pub struct TrainerArgs {
     /// Optionally specify a list of tags to get tactics for. Every tactic returned will have one
     /// of these tags
     pub tags: Vec<String>,
+    #[clap(short, long, value_name = "PUZZLE_ID", conflicts_with_all = &["rating", "tags"])]
+    /// Replay a specific Lichess puzzle by ID.
+    pub id: Option<String>,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -120,6 +124,7 @@ impl PracticeConfig {
             trainer_args: TrainerArgs {
                 rating: args.rating,
                 tags,
+                id: None,
             },
             default_rating_range: RatingRange {
                 lower: 600,
@@ -143,22 +148,14 @@ impl PracticeConfig {
 }
 
 pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
-    // dbg!(&opts);
-    let tactic = get_new_puzzle(tactic_request(&opts)?).await?;
-    println!("{}", puzzle_reference(&tactic));
-    let fen = tactic.fen.clone();
-    // let fen = "r6k/pp2r2p/4Rp1Q/3p4/8/1N1P2R1/PqP2bPP/7K b - - 0 24";
-    let moves = tactic.moves.clone();
-    let setup: Fen = fen.parse()?;
-    let mut position: Chess = setup.position(CastlingMode::Standard)?;
-    let mut continuation_moves = moves.iter().map(|m| -> Uci { m.parse().unwrap() });
-    let first_move = &continuation_moves
-        .next()
-        .unwrap()
-        .to_move(&position)
-        .unwrap();
-    let their_side = position.turn();
-    position = position.play(first_move).unwrap();
+    let puzzle = match opts.id.as_deref() {
+        Some(id) => get_puzzle_by_id(id).await?,
+        None => get_new_puzzle(tactic_request(&opts)?).await?.try_into()?,
+    };
+    println!("{}", puzzle_reference(&puzzle));
+    let mut position = puzzle.position.clone();
+    let their_side = opposite_color(position.turn());
+    let mut continuation_moves = puzzle.moves.iter().map(|m| -> Uci { m.parse().unwrap() });
     println!();
     print_board(&position);
     let mut next_move = continuation_moves
@@ -191,7 +188,7 @@ pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
                 solved_correctly = false;
             }
             PromptResponse::ShowRating => {
-                println!("This tactic is rated {}.", tactic.rating);
+                println!("This tactic is rated {}.", puzzle.rating);
                 continue;
             }
             PromptResponse::Move(move_input) => {
@@ -236,7 +233,7 @@ pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
                     "".to_string()
                 };
                 println!("{}Completed this tactic.", prefix);
-                if let Err(error) = log_puzzle_attempt(&puzzle_attempt(&tactic, solved_correctly)) {
+                if let Err(error) = log_puzzle_attempt(&puzzle_attempt(&puzzle, solved_correctly)) {
                     eprintln!("Failed to log puzzle attempt: {}", error);
                 }
                 break;
@@ -280,6 +277,86 @@ pub struct ChessTactic {
     pub rating: i32,
     pub rating_deviation: i32,
     pub number_plays: i32,
+}
+
+#[derive(Clone, Debug)]
+struct Puzzle {
+    id: String,
+    moves: Vec<String>,
+    position: Chess,
+    rating: i32,
+    tags: Vec<String>,
+}
+
+impl TryFrom<ChessTactic> for Puzzle {
+    type Error = anyhow::Error;
+
+    fn try_from(tactic: ChessTactic) -> Result<Self> {
+        let ChessTactic {
+            id,
+            moves,
+            fen,
+            rating,
+            tags,
+            ..
+        } = tactic;
+        let setup: Fen = fen.parse()?;
+        let mut position: Chess = setup.position(CastlingMode::Standard)?;
+        let mut moves = moves.into_iter();
+        let first_move = moves
+            .next()
+            .ok_or_else(|| anyhow!("Puzzle {} has no moves", id))?;
+        let first_move = first_move.parse::<Uci>()?.to_move(&position)?;
+        position = position.play(&first_move)?;
+        let moves = moves.collect::<Vec<_>>();
+        if moves.is_empty() {
+            return Err(anyhow!("Puzzle {} has no solution moves", id));
+        }
+
+        return Ok(Self {
+            id,
+            moves,
+            position,
+            rating,
+            tags,
+        });
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct LichessPuzzleResponse {
+    puzzle: LichessPuzzle,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct LichessPuzzle {
+    id: String,
+    rating: i32,
+    solution: Vec<String>,
+    themes: Vec<String>,
+    fen: String,
+}
+
+impl TryFrom<LichessPuzzleResponse> for Puzzle {
+    type Error = anyhow::Error;
+
+    fn try_from(response: LichessPuzzleResponse) -> Result<Self> {
+        let puzzle = response.puzzle;
+        let setup: Fen = puzzle.fen.parse()?;
+        let position: Chess = setup.position(CastlingMode::Standard)?;
+        if puzzle.solution.is_empty() {
+            return Err(anyhow!("Puzzle {} has no solution moves", puzzle.id));
+        }
+
+        return Ok(Self {
+            id: puzzle.id,
+            moves: puzzle.solution,
+            position,
+            rating: puzzle.rating,
+            tags: puzzle.themes,
+        });
+    }
 }
 
 #[derive(Serialize, Debug)]
@@ -421,6 +498,19 @@ async fn get_new_puzzle(request: ChessTacticRequest) -> Result<ChessTactic> {
     return Ok(tactic);
 }
 
+async fn get_puzzle_by_id(id: &str) -> Result<Puzzle> {
+    let client = reqwest::Client::new();
+    let response: LichessPuzzleResponse = client
+        .get(get_lichess_puzzle_endpoint(id))
+        .header("User-Agent", "tactics-trainer-cli")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    return response.try_into();
+}
+
 fn get_api_endpoint() -> String {
     return format!(
         "{}/api/v1/tactic",
@@ -428,20 +518,28 @@ fn get_api_endpoint() -> String {
     );
 }
 
-fn puzzle_reference(tactic: &ChessTactic) -> String {
-    return format!("Puzzle URL: https://lichess.org/training/{}", tactic.id);
+fn get_lichess_puzzle_endpoint(id: &str) -> String {
+    return format!(
+        "{}/api/puzzle/{}",
+        env::var("LICHESS_SERVER_URL").unwrap_or("https://lichess.org".to_string()),
+        id
+    );
 }
 
-fn puzzle_attempt(tactic: &ChessTactic, correct: bool) -> PuzzleAttempt {
-    return puzzle_attempt_at(tactic, correct, current_unix_timestamp());
+fn puzzle_reference(puzzle: &Puzzle) -> String {
+    return format!("Puzzle URL: https://lichess.org/training/{}", puzzle.id);
 }
 
-fn puzzle_attempt_at(tactic: &ChessTactic, correct: bool, timestamp: u64) -> PuzzleAttempt {
+fn puzzle_attempt(puzzle: &Puzzle, correct: bool) -> PuzzleAttempt {
+    return puzzle_attempt_at(puzzle, correct, current_unix_timestamp());
+}
+
+fn puzzle_attempt_at(puzzle: &Puzzle, correct: bool, timestamp: u64) -> PuzzleAttempt {
     return PuzzleAttempt {
-        puzzle_id: tactic.id.clone(),
-        rating: tactic.rating,
+        puzzle_id: puzzle.id.clone(),
+        rating: puzzle.rating,
         timestamp: Some(timestamp),
-        tags: tactic.tags.clone(),
+        tags: puzzle.tags.clone(),
         correct,
     };
 }
@@ -538,6 +636,14 @@ fn print_side(side: &Color) -> String {
     }
 }
 
+fn opposite_color(color: Color) -> Color {
+    if color == Color::White {
+        return Color::Black;
+    }
+
+    return Color::White;
+}
+
 fn get_prompt(position: &Chess) -> String {
     let side = if position.turn() == Color::White {
         "White"
@@ -631,6 +737,7 @@ fn piece_unicode(piece: &Piece) -> &'static str {
 mod tests {
     use super::*;
 
+    use clap::Parser;
     use shakmaty::Role;
     use std::env;
     use std::ffi::OsString;
@@ -668,17 +775,13 @@ mod tests {
         }
     }
 
-    fn sample_tactic() -> ChessTactic {
-        return ChessTactic {
+    fn sample_puzzle() -> Puzzle {
+        return Puzzle {
             id: "puzzle-1".to_string(),
-            moves: vec![],
-            fen: "startpos".to_string(),
-            popularity: 91,
-            tags: vec!["mateIn1".to_string()],
-            game_link: "https://example.test/game".to_string(),
+            moves: vec!["e7e5".to_string()],
+            position: Chess::default(),
             rating: 1200,
-            rating_deviation: 75,
-            number_plays: 42,
+            tags: vec!["mateIn1".to_string()],
         };
     }
 
@@ -717,6 +820,7 @@ mod tests {
             trainer_args: TrainerArgs {
                 rating: None,
                 tags: vec![],
+                id: None,
             },
             calibrate_rating: true,
             default_rating_range: RatingRange {
@@ -744,6 +848,45 @@ mod tests {
         let _env = EnvVarGuard::set("TACTICS_SERVER_URL", "http://localhost:3000");
 
         assert_eq!(get_api_endpoint(), "http://localhost:3000/api/v1/tactic");
+    }
+
+    #[test]
+    fn default_lichess_puzzle_endpoint_uses_lichess() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::remove("LICHESS_SERVER_URL");
+
+        assert_eq!(
+            get_lichess_puzzle_endpoint("zZG03"),
+            "https://lichess.org/api/puzzle/zZG03"
+        );
+    }
+
+    #[test]
+    fn configured_lichess_puzzle_endpoint_uses_lichess_server_url() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::set("LICHESS_SERVER_URL", "http://localhost:4000");
+
+        assert_eq!(
+            get_lichess_puzzle_endpoint("zZG03"),
+            "http://localhost:4000/api/puzzle/zZG03"
+        );
+    }
+
+    #[test]
+    fn trainer_args_parse_replay_id() {
+        let args = TrainerArgs::try_parse_from(["tactics-trainer", "--id", "zZG03"]).unwrap();
+
+        assert_eq!(args.id, Some("zZG03".to_string()));
+        assert_eq!(args.rating, None);
+        assert_eq!(args.tags, Vec::<String>::new());
+    }
+
+    #[test]
+    fn trainer_args_replay_id_conflicts_with_filters() {
+        let result =
+            TrainerArgs::try_parse_from(["tactics-trainer", "--id", "zZG03", "--rating", "0-1200"]);
+
+        assert!(result.is_err());
     }
 
     #[test]
@@ -892,18 +1035,62 @@ mod tests {
     }
 
     #[test]
+    fn chess_madra_tactic_converts_to_playable_puzzle() {
+        let tactic = ChessTactic {
+            id: "puzzle-1".to_string(),
+            moves: vec!["e2e4".to_string(), "e7e5".to_string()],
+            fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string(),
+            popularity: 91,
+            tags: vec!["opening".to_string()],
+            game_link: "https://example.test/game".to_string(),
+            rating: 1200,
+            rating_deviation: 75,
+            number_plays: 42,
+        };
+
+        let puzzle = Puzzle::try_from(tactic).unwrap();
+
+        assert_eq!(puzzle.id, "puzzle-1");
+        assert_eq!(puzzle.moves, vec!["e7e5".to_string()]);
+        assert_eq!(puzzle.position.turn(), Color::Black);
+        assert_eq!(puzzle.tags, vec!["opening".to_string()]);
+    }
+
+    #[test]
+    fn lichess_response_converts_to_playable_puzzle() {
+        let json = r#"{
+            "puzzle": {
+                "id": "zZG03",
+                "rating": 1203,
+                "solution": ["c1h1", "h2g3"],
+                "themes": ["endgame", "fork"],
+                "fen": "7k/1p4p1/1p1R3p/4N3/1P6/P6P/5nPK/2r5 b - - 1 1"
+            }
+        }"#;
+        let response: LichessPuzzleResponse = serde_json::from_str(json).unwrap();
+
+        let puzzle = Puzzle::try_from(response).unwrap();
+
+        assert_eq!(puzzle.id, "zZG03");
+        assert_eq!(puzzle.moves, vec!["c1h1".to_string(), "h2g3".to_string()]);
+        assert_eq!(puzzle.position.turn(), Color::Black);
+        assert_eq!(puzzle.rating, 1203);
+        assert_eq!(puzzle.tags, vec!["endgame".to_string(), "fork".to_string()]);
+    }
+
+    #[test]
     fn puzzle_reference_includes_puzzle_url() {
-        let tactic = sample_tactic();
+        let puzzle = sample_puzzle();
 
         assert_eq!(
-            puzzle_reference(&tactic),
+            puzzle_reference(&puzzle),
             "Puzzle URL: https://lichess.org/training/puzzle-1"
         );
     }
 
     #[test]
     fn puzzle_attempt_captures_id_rating_and_result() {
-        let attempt = puzzle_attempt(&sample_tactic(), true);
+        let attempt = puzzle_attempt(&sample_puzzle(), true);
 
         assert_eq!(attempt.puzzle_id, "puzzle-1");
         assert_eq!(attempt.rating, 1200);
@@ -919,7 +1106,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         let _env = EnvVarGuard::set("CHESS_PRACTICE_LOG", path.to_str().unwrap());
 
-        log_puzzle_attempt(&puzzle_attempt_at(&sample_tactic(), false, 1_719_000_000)).unwrap();
+        log_puzzle_attempt(&puzzle_attempt_at(&sample_puzzle(), false, 1_719_000_000)).unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
