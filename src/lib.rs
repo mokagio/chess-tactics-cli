@@ -679,10 +679,8 @@ fn print_help() {
 
 fn print_board(position: &Chess) {
     let board: &Board = position.board();
-    // Square colours (light, dark), chosen so both white and black pieces
-    // stay legible on either square.
-    let light = (152u8, 174, 196);
-    let dark = (95u8, 122, 150);
+    let light = (191u8, 167, 111);
+    let dark = (132u8, 97, 48);
     for row in 0..8 {
         print!("  {}  ", 8 - row);
         for col in 0..8 {
