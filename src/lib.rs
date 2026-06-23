@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     convert::{TryFrom, TryInto},
     env, fmt,
     fs::{self, OpenOptions},
@@ -38,16 +39,19 @@ pub struct TrainerArgs {
 #[derive(Parser, Clone, Debug)]
 #[clap(version = "1.0", author = "Marcus B. <me@mbuffett.com>")]
 pub struct PracticeArgs {
-    #[clap(short, long)]
+    #[clap(short, long, conflicts_with = "review")]
     /// The rating range to start from. If omitted, chess-practice calibrates from the practice log.
     pub rating: Option<String>,
-    #[clap(short, long)]
+    #[clap(short, long, conflicts_with = "review")]
     /// Optionally specify a list of tags to get tactics for. Every tactic returned will have one
     /// of these tags
     pub tags: Vec<String>,
-    #[clap(long = "tag", value_name = "TAG")]
+    #[clap(long = "tag", value_name = "TAG", conflicts_with = "review")]
     /// Alias for --tags.
     pub tag_aliases: Vec<String>,
+    #[clap(long)]
+    /// Replay previously missed puzzles from the practice log.
+    pub review: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,10 +116,12 @@ pub struct PracticeConfig {
     max_runs: Option<usize>,
     retry_delay: Duration,
     clear_screen: bool,
+    review_mode: bool,
 }
 
 impl PracticeConfig {
     pub fn from_args(args: PracticeArgs) -> Result<Self> {
+        let review_mode = args.review;
         let mut tags = args.tags;
         tags.extend(args.tag_aliases);
 
@@ -134,6 +140,7 @@ impl PracticeConfig {
             max_runs: env_usize("CHESS_PRACTICE_MAX_RUNS")?,
             retry_delay: Duration::from_secs(env_u64("CHESS_PRACTICE_RETRY_DELAY")?.unwrap_or(1)),
             clear_screen: !env_flag("CHESS_PRACTICE_NO_CLEAR"),
+            review_mode,
         });
     }
 
@@ -418,10 +425,28 @@ where
     Sleep: FnMut(Duration),
 {
     let mut run_count = 0;
+    let mut review_index = 0;
+    let review_queue = if config.review_mode {
+        let attempts = read_attempts()?;
+        let review_queue = review_puzzle_ids(&attempts);
+        if review_queue.is_empty() {
+            writeln!(stderr, "chess-practice: no failed puzzles to review")?;
+            return Ok(0);
+        }
+
+        Some(review_queue)
+    } else {
+        None
+    };
 
     loop {
-        let attempts = read_attempts()?;
-        let trainer_args = config.trainer_args_for_attempts(&attempts);
+        let trainer_args = match &review_queue {
+            Some(review_queue) => review_trainer_args(&review_queue[review_index]),
+            None => {
+                let attempts = read_attempts()?;
+                config.trainer_args_for_attempts(&attempts)
+            }
+        };
 
         if config.clear_screen {
             clear_screen()?;
@@ -438,6 +463,13 @@ where
 
         match result {
             Ok(()) => {
+                if let Some(review_queue) = &review_queue {
+                    review_index += 1;
+                    if review_index >= review_queue.len() {
+                        return Ok(0);
+                    }
+                }
+
                 if should_stop {
                     return Ok(0);
                 }
@@ -482,6 +514,59 @@ fn calibrate_rating_range(base: RatingRange, attempts: &[PuzzleAttempt]) -> Rati
     };
 
     return base.with_center(center);
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ReviewCandidate {
+    puzzle_id: String,
+    missed_count: usize,
+    last_missed_at: u64,
+    last_missed_index: usize,
+}
+
+fn review_puzzle_ids(attempts: &[PuzzleAttempt]) -> Vec<String> {
+    let mut candidates = BTreeMap::<String, ReviewCandidate>::new();
+
+    for (index, attempt) in attempts.iter().enumerate() {
+        if attempt.correct {
+            continue;
+        }
+
+        let candidate = candidates
+            .entry(attempt.puzzle_id.clone())
+            .or_insert_with(|| ReviewCandidate {
+                puzzle_id: attempt.puzzle_id.clone(),
+                missed_count: 0,
+                last_missed_at: 0,
+                last_missed_index: index,
+            });
+        candidate.missed_count += 1;
+        candidate.last_missed_at = attempt.timestamp.unwrap_or(0);
+        candidate.last_missed_index = index;
+    }
+
+    let mut candidates = candidates.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .missed_count
+            .cmp(&left.missed_count)
+            .then_with(|| right.last_missed_at.cmp(&left.last_missed_at))
+            .then_with(|| right.last_missed_index.cmp(&left.last_missed_index))
+            .then_with(|| left.puzzle_id.cmp(&right.puzzle_id))
+    });
+
+    return candidates
+        .into_iter()
+        .map(|candidate| candidate.puzzle_id)
+        .collect();
+}
+
+fn review_trainer_args(puzzle_id: &str) -> TrainerArgs {
+    return TrainerArgs {
+        rating: None,
+        tags: vec![],
+        id: Some(puzzle_id.to_string()),
+    };
 }
 
 async fn get_new_puzzle(request: ChessTacticRequest) -> Result<ChessTactic> {
@@ -801,6 +886,21 @@ mod tests {
         };
     }
 
+    fn sample_attempt_with_id(
+        puzzle_id: &str,
+        rating: i32,
+        correct: bool,
+        timestamp: u64,
+    ) -> PuzzleAttempt {
+        return PuzzleAttempt {
+            puzzle_id: puzzle_id.to_string(),
+            rating,
+            timestamp: Some(timestamp),
+            tags: vec![],
+            correct,
+        };
+    }
+
     fn practice_args(
         rating: Option<&str>,
         tags: Vec<&str>,
@@ -810,10 +910,11 @@ mod tests {
             rating: rating.map(String::from),
             tags: tags.into_iter().map(String::from).collect(),
             tag_aliases: tag_aliases.into_iter().map(String::from).collect(),
+            review: false,
         };
     }
 
-    fn test_practice_config(max_runs: usize, clear_screen: bool) -> PracticeConfig {
+    fn test_practice_config(max_runs: Option<usize>, clear_screen: bool) -> PracticeConfig {
         return PracticeConfig {
             trainer_args: TrainerArgs {
                 rating: None,
@@ -826,10 +927,17 @@ mod tests {
                 upper: 1200,
             },
             once: false,
-            max_runs: Some(max_runs),
+            max_runs,
             retry_delay: Duration::from_secs(0),
             clear_screen,
+            review_mode: false,
         };
+    }
+
+    fn test_review_config(max_runs: Option<usize>, clear_screen: bool) -> PracticeConfig {
+        let mut config = test_practice_config(max_runs, clear_screen);
+        config.review_mode = true;
+        return config;
     }
 
     #[test]
@@ -883,6 +991,13 @@ mod tests {
     fn trainer_args_replay_id_conflicts_with_filters() {
         let result =
             TrainerArgs::try_parse_from(["tactics-trainer", "--id", "zZG03", "--rating", "0-1200"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn practice_args_review_conflicts_with_filters() {
+        let result = PracticeArgs::try_parse_from(["chess-practice", "--review", "--tag", "fork"]);
 
         assert!(result.is_err());
     }
@@ -1228,6 +1343,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn review_puzzle_ids_order_most_missed_then_recent() {
+        let attempts = vec![
+            sample_attempt_with_id("recent-once", 1000, false, 300),
+            sample_attempt_with_id("often-old", 1100, false, 100),
+            sample_attempt_with_id("often-old", 1100, false, 200),
+            sample_attempt_with_id("ignored-correct", 1200, true, 400),
+            sample_attempt_with_id("older-once", 1300, false, 250),
+        ];
+
+        assert_eq!(
+            review_puzzle_ids(&attempts),
+            vec![
+                "often-old".to_string(),
+                "recent-once".to_string(),
+                "older-once".to_string()
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn practice_loop_reloads_attempts_between_runs() {
         let run_args = Arc::new(Mutex::new(Vec::<TrainerArgs>::new()));
@@ -1240,7 +1375,7 @@ mod tests {
         ];
 
         let exit_code = run_practice_loop_with_hooks(
-            test_practice_config(2, false),
+            test_practice_config(Some(2), false),
             {
                 let run_args = Arc::clone(&run_args);
                 move |args| {
@@ -1286,7 +1421,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         run_practice_loop_with_hooks(
-            test_practice_config(2, true),
+            test_practice_config(Some(2), true),
             {
                 let events = Arc::clone(&events);
                 move |_| {
@@ -1325,7 +1460,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let exit_code = run_practice_loop_with_hooks(
-            test_practice_config(2, false),
+            test_practice_config(Some(2), false),
             {
                 let run_count = Arc::clone(&run_count);
                 move |_| {
@@ -1352,5 +1487,60 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert_eq!(*run_count.lock().unwrap(), 2);
         assert!(String::from_utf8(stderr).unwrap().contains("retrying"));
+    }
+
+    #[tokio::test]
+    async fn review_loop_replays_failed_puzzles_in_review_order() {
+        let run_ids = Arc::new(Mutex::new(Vec::<String>::new()));
+        let attempts = vec![
+            sample_attempt_with_id("puzzle-a", 900, false, 100),
+            sample_attempt_with_id("puzzle-b", 900, false, 200),
+            sample_attempt_with_id("puzzle-b", 900, false, 300),
+        ];
+        let mut stderr = Vec::new();
+
+        let exit_code = run_practice_loop_with_hooks(
+            test_review_config(None, false),
+            {
+                let run_ids = Arc::clone(&run_ids);
+                move |args| {
+                    run_ids.lock().unwrap().push(args.id.unwrap());
+                    async { Ok(()) }
+                }
+            },
+            || Ok(()),
+            move || Ok(attempts.clone()),
+            |_| {},
+            &mut stderr,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            *run_ids.lock().unwrap(),
+            vec!["puzzle-b".to_string(), "puzzle-a".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn review_loop_reports_empty_review_queue() {
+        let mut stderr = Vec::new();
+
+        let exit_code = run_practice_loop_with_hooks(
+            test_review_config(None, false),
+            |_| async { Ok(()) },
+            || Ok(()),
+            || Ok(vec![sample_attempt_with_id("puzzle-a", 900, true, 100)]),
+            |_| {},
+            &mut stderr,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert!(String::from_utf8(stderr)
+            .unwrap()
+            .contains("no failed puzzles to review"));
     }
 }

@@ -54,12 +54,17 @@ To keep fetching new puzzles after each solved tactic:
 ```sh
 chess-practice --rating=600-1200 --tag mateIn1
 ```
+To review puzzles missed in previous practice runs:
+```sh
+chess-practice --review
+```
 From a checkout, run it with Cargo:
 ```sh
 cargo run --bin chess-practice -- --tag mateIn1
 ```
 The `scripts/chess-practice` checkout shim calls the Rust command.
 When no `--rating` is supplied, `chess-practice` starts from `--rating=600-1200` and calibrates that range from recent entries in the practice log.
+Review mode replays failed puzzles from the practice log, ordered by most misses and then most recent miss.
 Each puzzle prints its Lichess training URL before the board.
 The screen is cleared before each new puzzle.
 Completed puzzles are logged to `~/.chess-practice/puzzles.jsonl` with puzzle id, rating, Unix timestamp, tags, and correctness.
