@@ -37,6 +37,9 @@ pub struct TrainerArgs {
     #[clap(short, long, value_name = "PATH", conflicts_with_all = &["rating", "tags", "id"])]
     /// Load one or more puzzles from a JSON or JSONL file.
     pub puzzles: Option<PathBuf>,
+    #[clap(long)]
+    /// Always render the board from White's perspective.
+    pub white_orientation: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -55,6 +58,15 @@ pub struct PracticeArgs {
     #[clap(long)]
     /// Replay previously missed puzzles from the practice log.
     pub review: bool,
+    #[clap(long)]
+    /// Always render the board from White's perspective.
+    pub white_orientation: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BoardOrientation {
+    White,
+    Black,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,6 +137,7 @@ pub struct PracticeConfig {
 impl PracticeConfig {
     pub fn from_args(args: PracticeArgs) -> Result<Self> {
         let review_mode = args.review;
+        let white_orientation = args.white_orientation;
         let mut tags = args.tags;
         tags.extend(args.tag_aliases);
 
@@ -135,6 +148,7 @@ impl PracticeConfig {
                 tags,
                 id: None,
                 puzzles: None,
+                white_orientation,
             },
             default_rating_range: RatingRange {
                 lower: 600,
@@ -159,6 +173,7 @@ impl PracticeConfig {
 }
 
 pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
+    let white_orientation = opts.white_orientation;
     let mut puzzles = get_trainer_puzzles(&opts).await?;
     if puzzles.len() != 1 {
         return Err(anyhow!(
@@ -167,12 +182,36 @@ pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
         ));
     }
 
-    return run_puzzle(puzzles.remove(0));
+    return run_puzzle(puzzles.remove(0), white_orientation);
 }
 
 pub async fn run_trainer(opts: TrainerArgs) -> Result<()> {
-    for puzzle in get_trainer_puzzles(&opts).await? {
-        run_puzzle(puzzle)?;
+    let white_orientation = opts.white_orientation;
+    let puzzles = get_trainer_puzzles(&opts).await?;
+    return run_puzzle_sequence(
+        puzzles,
+        white_orientation,
+        clear_practice_screen,
+        run_puzzle,
+    );
+}
+
+fn run_puzzle_sequence<Clear, Run>(
+    puzzles: Vec<Puzzle>,
+    white_orientation: bool,
+    mut clear_screen: Clear,
+    mut run: Run,
+) -> Result<()>
+where
+    Clear: FnMut() -> Result<()>,
+    Run: FnMut(Puzzle, bool) -> Result<()>,
+{
+    let should_clear = puzzles.len() > 1;
+    for puzzle in puzzles {
+        if should_clear {
+            clear_screen()?;
+        }
+        run(puzzle, white_orientation)?;
     }
 
     return Ok(());
@@ -191,13 +230,13 @@ async fn get_trainer_puzzles(opts: &TrainerArgs) -> Result<Vec<Puzzle>> {
     return Ok(vec![puzzle]);
 }
 
-fn run_puzzle(puzzle: Puzzle) -> Result<()> {
+fn run_puzzle(puzzle: Puzzle, white_orientation: bool) -> Result<()> {
     println!("{}", puzzle_reference(&puzzle));
     let mut position = puzzle.position.clone();
     let their_side = opposite_color(position.turn());
     let mut continuation_moves = puzzle.moves.iter().map(|m| -> Uci { m.parse().unwrap() });
     println!();
-    print_board(&position);
+    print_board(&position, white_orientation);
     let mut next_move = next_continuation_move(&mut continuation_moves, &position).unwrap();
     let mut solved_correctly = true;
     loop {
@@ -209,7 +248,7 @@ fn run_puzzle(puzzle: Puzzle) -> Result<()> {
         let mut correct = false;
         match reply {
             PromptResponse::ShowBoard => {
-                print_board(&position);
+                print_board(&position, white_orientation);
                 continue;
             }
             PromptResponse::Help => {
@@ -569,7 +608,10 @@ where
 
     loop {
         let trainer_args = match &review_queue {
-            Some(review_queue) => review_trainer_args(&review_queue[review_index]),
+            Some(review_queue) => review_trainer_args(
+                &review_queue[review_index],
+                config.trainer_args.white_orientation,
+            ),
             None => {
                 let attempts = read_attempts()?;
                 config.trainer_args_for_attempts(&attempts)
@@ -689,12 +731,13 @@ fn review_puzzle_ids(attempts: &[PuzzleAttempt]) -> Vec<String> {
         .collect();
 }
 
-fn review_trainer_args(puzzle_id: &str) -> TrainerArgs {
+fn review_trainer_args(puzzle_id: &str, white_orientation: bool) -> TrainerArgs {
     return TrainerArgs {
         rating: None,
         tags: vec![],
         id: Some(puzzle_id.to_string()),
         puzzles: None,
+        white_orientation,
     };
 }
 
@@ -891,15 +934,15 @@ fn print_help() {
     }
 }
 
-fn print_board(position: &Chess) {
+fn print_board(position: &Chess, white_orientation: bool) {
     let board: &Board = position.board();
     let light = (191u8, 167, 111);
     let dark = (132u8, 97, 48);
+    let orientation = board_orientation(position, white_orientation);
     for row in 0..8 {
-        print!("  {}  ", 8 - row);
+        print!("  {}  ", board_rank_label(row, orientation));
         for col in 0..8 {
-            let idx = 64 - (row + 1) * 8 + col;
-            let square = Square::new(idx);
+            let square = board_square(row, col, orientation);
             let piece = board.piece_at(square);
             let square_is_light = (row + col) % 2 == 0;
             let (br, bg, bb) = if square_is_light { light } else { dark };
@@ -918,14 +961,44 @@ fn print_board(position: &Chess) {
         println!();
     }
 
-    println!(
-        "     {}",
-        (b'a'..=b'h')
-            .map(char::from)
-            .map(|c| c.to_string())
-            .collect::<Vec<String>>()
-            .join(" ")
-    )
+    println!("     {}", board_file_labels(orientation))
+}
+
+fn board_orientation(position: &Chess, white_orientation: bool) -> BoardOrientation {
+    if white_orientation || position.turn() == Color::White {
+        return BoardOrientation::White;
+    }
+
+    return BoardOrientation::Black;
+}
+
+fn board_square(row: usize, col: usize, orientation: BoardOrientation) -> Square {
+    let (rank, file) = match orientation {
+        BoardOrientation::White => (7 - row, col),
+        BoardOrientation::Black => (row, 7 - col),
+    };
+
+    return Square::new((rank * 8 + file) as u32);
+}
+
+fn board_rank_label(row: usize, orientation: BoardOrientation) -> usize {
+    return match orientation {
+        BoardOrientation::White => 8 - row,
+        BoardOrientation::Black => row + 1,
+    };
+}
+
+fn board_file_labels(orientation: BoardOrientation) -> String {
+    let mut labels = (b'a'..=b'h').map(char::from).collect::<Vec<_>>();
+    if orientation == BoardOrientation::Black {
+        labels.reverse();
+    }
+
+    return labels
+        .into_iter()
+        .map(|file| file.to_string())
+        .collect::<Vec<String>>()
+        .join(" ");
 }
 
 fn piece_unicode(piece: &Piece) -> &'static str {
@@ -1092,6 +1165,7 @@ mod tests {
             tags: tags.into_iter().map(String::from).collect(),
             tag_aliases: tag_aliases.into_iter().map(String::from).collect(),
             review: false,
+            white_orientation: false,
         };
     }
 
@@ -1102,6 +1176,7 @@ mod tests {
                 tags: vec![],
                 id: None,
                 puzzles: None,
+                white_orientation: false,
             },
             calibrate_rating: true,
             default_rating_range: RatingRange {
@@ -1168,6 +1243,7 @@ mod tests {
         assert_eq!(args.puzzles, None);
         assert_eq!(args.rating, None);
         assert_eq!(args.tags, Vec::<String>::new());
+        assert!(!args.white_orientation);
     }
 
     #[test]
@@ -1187,6 +1263,14 @@ mod tests {
         assert_eq!(args.id, None);
         assert_eq!(args.rating, None);
         assert_eq!(args.tags, Vec::<String>::new());
+        assert!(!args.white_orientation);
+    }
+
+    #[test]
+    fn trainer_args_parse_white_orientation() {
+        let args = TrainerArgs::try_parse_from(["tactics-trainer", "--white-orientation"]).unwrap();
+
+        assert!(args.white_orientation);
     }
 
     #[test]
@@ -1207,6 +1291,16 @@ mod tests {
         let result = PracticeArgs::try_parse_from(["chess-practice", "--review", "--tag", "fork"]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn practice_config_preserves_white_orientation() {
+        let config = PracticeConfig::from_args(
+            PracticeArgs::try_parse_from(["chess-practice", "--white-orientation"]).unwrap(),
+        )
+        .unwrap();
+
+        assert!(config.trainer_args.white_orientation);
     }
 
     #[test]
@@ -1236,6 +1330,61 @@ mod tests {
         assert_eq!(
             get_prompt(&position),
             "Black to move, enter the best move, or '?' for help: "
+        );
+    }
+
+    #[test]
+    fn board_orientation_defaults_to_side_to_move() {
+        let position = Chess::default();
+        assert_eq!(board_orientation(&position, false), BoardOrientation::White);
+
+        let white_move = "e2e4".parse::<Uci>().unwrap().to_move(&position).unwrap();
+        let position = position.play(&white_move).unwrap();
+        assert_eq!(board_orientation(&position, false), BoardOrientation::Black);
+    }
+
+    #[test]
+    fn board_orientation_can_force_white() {
+        let position = Chess::default();
+        let white_move = "e2e4".parse::<Uci>().unwrap().to_move(&position).unwrap();
+        let position = position.play(&white_move).unwrap();
+
+        assert_eq!(board_orientation(&position, true), BoardOrientation::White);
+    }
+
+    #[test]
+    fn board_coordinates_follow_orientation() {
+        assert_eq!(
+            board_square(0, 0, BoardOrientation::White).to_string(),
+            "a8"
+        );
+        assert_eq!(
+            board_square(7, 7, BoardOrientation::White).to_string(),
+            "h1"
+        );
+        assert_eq!(
+            board_square(0, 0, BoardOrientation::Black).to_string(),
+            "h1"
+        );
+        assert_eq!(
+            board_square(7, 7, BoardOrientation::Black).to_string(),
+            "a8"
+        );
+    }
+
+    #[test]
+    fn board_labels_follow_orientation() {
+        assert_eq!(board_rank_label(0, BoardOrientation::White), 8);
+        assert_eq!(board_rank_label(7, BoardOrientation::White), 1);
+        assert_eq!(
+            board_file_labels(BoardOrientation::White),
+            "a b c d e f g h"
+        );
+        assert_eq!(board_rank_label(0, BoardOrientation::Black), 1);
+        assert_eq!(board_rank_label(7, BoardOrientation::Black), 8);
+        assert_eq!(
+            board_file_labels(BoardOrientation::Black),
+            "h g f e d c b a"
         );
     }
 
@@ -1486,6 +1635,60 @@ mod tests {
         assert_eq!(puzzles[0].id, "madra-1");
         assert_eq!(puzzles[1].id, "zZG03");
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn puzzle_sequence_clears_before_each_file_puzzle() {
+        let events = std::cell::RefCell::new(Vec::<String>::new());
+
+        run_puzzle_sequence(
+            vec![sample_puzzle(), sample_puzzle()],
+            true,
+            || {
+                events.borrow_mut().push("clear".to_string());
+                Ok(())
+            },
+            |puzzle, white_orientation| {
+                events
+                    .borrow_mut()
+                    .push(format!("run:{}:{}", puzzle.id, white_orientation));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            events.into_inner(),
+            vec![
+                "clear".to_string(),
+                "run:puzzle-1:true".to_string(),
+                "clear".to_string(),
+                "run:puzzle-1:true".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn puzzle_sequence_keeps_single_puzzle_output_in_place() {
+        let events = std::cell::RefCell::new(Vec::<String>::new());
+
+        run_puzzle_sequence(
+            vec![sample_puzzle()],
+            false,
+            || {
+                events.borrow_mut().push("clear".to_string());
+                Ok(())
+            },
+            |puzzle, white_orientation| {
+                events
+                    .borrow_mut()
+                    .push(format!("run:{}:{}", puzzle.id, white_orientation));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(events.into_inner(), vec!["run:puzzle-1:false".to_string()]);
     }
 
     #[test]

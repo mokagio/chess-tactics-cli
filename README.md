@@ -53,6 +53,9 @@ Or feed one or more puzzles from a file:
 ```sh
 tactics-trainer --puzzles puzzles.jsonl
 ```
+Boards are shown from the side to move.
+Use `--white-orientation` to keep White's perspective.
+When a puzzle file contains multiple puzzles, the screen is cleared before each puzzle.
 
 To keep fetching new puzzles after each solved tactic:
 ```sh
