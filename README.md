@@ -49,6 +49,10 @@ Or replay a specific Lichess puzzle:
 ```sh
 tactics-trainer --id zZG03
 ```
+Or feed one or more puzzles from a file:
+```sh
+tactics-trainer --puzzles puzzles.jsonl
+```
 
 To keep fetching new puzzles after each solved tactic:
 ```sh
@@ -77,6 +81,20 @@ Puzzles are fetched with `POST https://chessmadra.com/api/v1/tactic`.
 Set `TACTICS_SERVER_URL` to override the host; the path remains `/api/v1/tactic`.
 Specific puzzle IDs are fetched with `GET https://lichess.org/api/puzzle/{id}`.
 Set `LICHESS_SERVER_URL` to override the host; the path remains `/api/puzzle/{id}`.
+
+## Puzzle Files
+
+Use `tactics-trainer --puzzles <path>` to play local puzzles.
+The file may contain a single JSON object, a JSON array, or JSON Lines with one object per line.
+Each object may be either:
+
+- a Chess Madra tactic object, with `id`, `moves`, `fen`, `popularity`, `tags`, `gameLink`, `rating`, `ratingDeviation`, and `numberPlays`
+- a Lichess API puzzle response, shaped as `{ "puzzle": { ... } }`
+- a bare Lichess puzzle object, with `id`, `rating`, `solution`, `themes`, and `fen`
+
+For Chess Madra records, the first UCI move in `moves` is played before prompting you, matching the remote API behavior.
+The remaining moves are the solution line.
+For Lichess records, the `solution` list is used directly from the supplied `fen`.
 
 The request body is JSON:
 

@@ -5,11 +5,11 @@ use std::{
     fs::{self, OpenOptions},
     future::Future,
     io::{self, BufRead, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use shakmaty::{
     fen::{self, Fen},
     san::San,
     uci::Uci,
-    Board, CastlingMode, Chess, Color, Piece, Position, Setup, Square,
+    Board, CastlingMode, Chess, Color, Move, Piece, Position, Setup, Square,
 };
 
 #[derive(Parser, Clone, Debug)]
@@ -31,9 +31,12 @@ pub struct TrainerArgs {
     /// Optionally specify a list of tags to get tactics for. Every tactic returned will have one
     /// of these tags
     pub tags: Vec<String>,
-    #[clap(short, long, value_name = "PUZZLE_ID", conflicts_with_all = &["rating", "tags"])]
+    #[clap(short, long, value_name = "PUZZLE_ID", conflicts_with_all = &["rating", "tags", "puzzles"])]
     /// Replay a specific Lichess puzzle by ID.
     pub id: Option<String>,
+    #[clap(short, long, value_name = "PATH", conflicts_with_all = &["rating", "tags", "id"])]
+    /// Load one or more puzzles from a JSON or JSONL file.
+    pub puzzles: Option<PathBuf>,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -131,6 +134,7 @@ impl PracticeConfig {
                 rating: args.rating,
                 tags,
                 id: None,
+                puzzles: None,
             },
             default_rating_range: RatingRange {
                 lower: 600,
@@ -155,21 +159,46 @@ impl PracticeConfig {
 }
 
 pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
+    let mut puzzles = get_trainer_puzzles(&opts).await?;
+    if puzzles.len() != 1 {
+        return Err(anyhow!(
+            "Expected exactly one puzzle, got {}",
+            puzzles.len()
+        ));
+    }
+
+    return run_puzzle(puzzles.remove(0));
+}
+
+pub async fn run_trainer(opts: TrainerArgs) -> Result<()> {
+    for puzzle in get_trainer_puzzles(&opts).await? {
+        run_puzzle(puzzle)?;
+    }
+
+    return Ok(());
+}
+
+async fn get_trainer_puzzles(opts: &TrainerArgs) -> Result<Vec<Puzzle>> {
+    if let Some(path) = &opts.puzzles {
+        return read_puzzles(path);
+    }
+
     let puzzle = match opts.id.as_deref() {
         Some(id) => get_puzzle_by_id(id).await?,
         None => get_new_puzzle(tactic_request(&opts)?).await?.try_into()?,
     };
+
+    return Ok(vec![puzzle]);
+}
+
+fn run_puzzle(puzzle: Puzzle) -> Result<()> {
     println!("{}", puzzle_reference(&puzzle));
     let mut position = puzzle.position.clone();
     let their_side = opposite_color(position.turn());
     let mut continuation_moves = puzzle.moves.iter().map(|m| -> Uci { m.parse().unwrap() });
     println!();
     print_board(&position);
-    let mut next_move = continuation_moves
-        .next()
-        .unwrap()
-        .to_move(&position)
-        .unwrap();
+    let mut next_move = next_continuation_move(&mut continuation_moves, &position).unwrap();
     let mut solved_correctly = true;
     loop {
         println!();
@@ -227,11 +256,14 @@ pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
                     response_san.to_string()
                 );
                 position = position.play(&response).unwrap();
-                next_move = continuation_moves
-                    .next()
-                    .unwrap()
-                    .to_move(&position)
-                    .unwrap();
+                match next_continuation_move(&mut continuation_moves, &position) {
+                    Some(move_) => next_move = move_,
+                    None => {
+                        println!("Completed this tactic.");
+                        log_completed_puzzle(&puzzle, solved_correctly);
+                        break;
+                    }
+                }
             }
             None => {
                 let prefix = if correct {
@@ -240,14 +272,27 @@ pub async fn run_single_puzzle(opts: TrainerArgs) -> Result<()> {
                     "".to_string()
                 };
                 println!("{}Completed this tactic.", prefix);
-                if let Err(error) = log_puzzle_attempt(&puzzle_attempt(&puzzle, solved_correctly)) {
-                    eprintln!("Failed to log puzzle attempt: {}", error);
-                }
+                log_completed_puzzle(&puzzle, solved_correctly);
                 break;
             }
         };
     }
     return Ok(());
+}
+
+fn next_continuation_move(
+    continuation_moves: &mut impl Iterator<Item = Uci>,
+    position: &Chess,
+) -> Option<Move> {
+    return continuation_moves
+        .next()
+        .map(|move_| move_.to_move(position).unwrap());
+}
+
+fn log_completed_puzzle(puzzle: &Puzzle, solved_correctly: bool) {
+    if let Err(error) = log_puzzle_attempt(&puzzle_attempt(puzzle, solved_correctly)) {
+        eprintln!("Failed to log puzzle attempt: {}", error);
+    }
 }
 
 enum PromptResponse {
@@ -349,7 +394,14 @@ impl TryFrom<LichessPuzzleResponse> for Puzzle {
     type Error = anyhow::Error;
 
     fn try_from(response: LichessPuzzleResponse) -> Result<Self> {
-        let puzzle = response.puzzle;
+        return response.puzzle.try_into();
+    }
+}
+
+impl TryFrom<LichessPuzzle> for Puzzle {
+    type Error = anyhow::Error;
+
+    fn try_from(puzzle: LichessPuzzle) -> Result<Self> {
         let setup: Fen = puzzle.fen.parse()?;
         let position: Chess = setup.position(CastlingMode::Standard)?;
         if puzzle.solution.is_empty() {
@@ -363,6 +415,42 @@ impl TryFrom<LichessPuzzleResponse> for Puzzle {
             rating: puzzle.rating,
             tags: puzzle.themes,
         });
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+enum PuzzleInput {
+    Batch(Vec<PuzzleRecord>),
+    Single(PuzzleRecord),
+}
+
+impl PuzzleInput {
+    fn into_records(self) -> Vec<PuzzleRecord> {
+        return match self {
+            Self::Batch(records) => records,
+            Self::Single(record) => vec![record],
+        };
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+enum PuzzleRecord {
+    LichessResponse(LichessPuzzleResponse),
+    LichessPuzzle(LichessPuzzle),
+    ChessMadra(ChessTactic),
+}
+
+impl TryFrom<PuzzleRecord> for Puzzle {
+    type Error = anyhow::Error;
+
+    fn try_from(record: PuzzleRecord) -> Result<Self> {
+        return match record {
+            PuzzleRecord::LichessResponse(response) => response.try_into(),
+            PuzzleRecord::LichessPuzzle(puzzle) => puzzle.try_into(),
+            PuzzleRecord::ChessMadra(tactic) => tactic.try_into(),
+        };
     }
 }
 
@@ -392,6 +480,46 @@ fn tactic_request(args: &TrainerArgs) -> Result<ChessTacticRequest> {
         rating_lte: rating_range.map(|range| range.upper),
         tags: args.tags.clone(),
     });
+}
+
+fn read_puzzles(path: &Path) -> Result<Vec<Puzzle>> {
+    let input = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read puzzles from {}", path.display()))?;
+    let records = parse_puzzle_records(&input)?;
+
+    return records
+        .into_iter()
+        .map(|record| record.try_into())
+        .collect::<Result<Vec<_>>>();
+}
+
+fn parse_puzzle_records(input: &str) -> Result<Vec<PuzzleRecord>> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(anyhow!("Puzzle file is empty"));
+    }
+
+    if let Ok(parsed) = serde_json::from_str::<PuzzleInput>(input) {
+        return Ok(parsed.into_records());
+    }
+
+    let mut records = vec![];
+    for (index, line) in input.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let record = serde_json::from_str::<PuzzleRecord>(line)
+            .with_context(|| format!("Failed to parse puzzle JSON on line {}", index + 1))?;
+        records.push(record);
+    }
+
+    if records.is_empty() {
+        return Err(anyhow!("Puzzle file is empty"));
+    }
+
+    return Ok(records);
 }
 
 pub async fn run_practice_loop(args: PracticeArgs) -> Result<i32> {
@@ -566,6 +694,7 @@ fn review_trainer_args(puzzle_id: &str) -> TrainerArgs {
         rating: None,
         tags: vec![],
         id: Some(puzzle_id.to_string()),
+        puzzles: None,
     };
 }
 
@@ -901,6 +1030,58 @@ mod tests {
         };
     }
 
+    fn madra_json(puzzle_id: &str) -> String {
+        return format!(
+            r#"{{
+                "id": "{}",
+                "moves": ["e2e4", "e7e5"],
+                "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                "popularity": 91,
+                "tags": ["opening"],
+                "gameLink": "https://example.test/game",
+                "rating": 1200,
+                "ratingDeviation": 75,
+                "numberPlays": 42
+            }}"#,
+            puzzle_id
+        );
+    }
+
+    fn lichess_puzzle_json(puzzle_id: &str) -> String {
+        return format!(
+            r#"{{
+                "id": "{}",
+                "rating": 1203,
+                "solution": ["c1h1", "h2g3"],
+                "themes": ["endgame", "fork"],
+                "fen": "7k/1p4p1/1p1R3p/4N3/1P6/P6P/5nPK/2r5 b - - 1 1"
+            }}"#,
+            puzzle_id
+        );
+    }
+
+    fn lichess_response_json(puzzle_id: &str) -> String {
+        return format!(
+            r#"{{
+                "puzzle": {}
+            }}"#,
+            lichess_puzzle_json(puzzle_id)
+        );
+    }
+
+    fn parse_puzzles(input: &str) -> Vec<Puzzle> {
+        return parse_puzzle_records(input)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.try_into().unwrap())
+            .collect();
+    }
+
+    fn json_line(input: String) -> String {
+        let value = serde_json::from_str::<serde_json::Value>(&input).unwrap();
+        return serde_json::to_string(&value).unwrap();
+    }
+
     fn practice_args(
         rating: Option<&str>,
         tags: Vec<&str>,
@@ -920,6 +1101,7 @@ mod tests {
                 rating: None,
                 tags: vec![],
                 id: None,
+                puzzles: None,
             },
             calibrate_rating: true,
             default_rating_range: RatingRange {
@@ -983,6 +1165,7 @@ mod tests {
         let args = TrainerArgs::try_parse_from(["tactics-trainer", "--id", "zZG03"]).unwrap();
 
         assert_eq!(args.id, Some("zZG03".to_string()));
+        assert_eq!(args.puzzles, None);
         assert_eq!(args.rating, None);
         assert_eq!(args.tags, Vec::<String>::new());
     }
@@ -991,6 +1174,30 @@ mod tests {
     fn trainer_args_replay_id_conflicts_with_filters() {
         let result =
             TrainerArgs::try_parse_from(["tactics-trainer", "--id", "zZG03", "--rating", "0-1200"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn trainer_args_parse_puzzle_file() {
+        let args =
+            TrainerArgs::try_parse_from(["tactics-trainer", "--puzzles", "puzzles.jsonl"]).unwrap();
+
+        assert_eq!(args.puzzles, Some(PathBuf::from("puzzles.jsonl")));
+        assert_eq!(args.id, None);
+        assert_eq!(args.rating, None);
+        assert_eq!(args.tags, Vec::<String>::new());
+    }
+
+    #[test]
+    fn trainer_args_puzzle_file_conflicts_with_filters() {
+        let result = TrainerArgs::try_parse_from([
+            "tactics-trainer",
+            "--puzzles",
+            "puzzles.jsonl",
+            "--rating",
+            "0-1200",
+        ]);
 
         assert!(result.is_err());
     }
@@ -1189,6 +1396,96 @@ mod tests {
         assert_eq!(puzzle.position.turn(), Color::Black);
         assert_eq!(puzzle.rating, 1203);
         assert_eq!(puzzle.tags, vec!["endgame".to_string(), "fork".to_string()]);
+    }
+
+    #[test]
+    fn next_continuation_move_stops_after_final_response() {
+        let response: LichessPuzzleResponse =
+            serde_json::from_str(&lichess_response_json("zZG03")).unwrap();
+        let puzzle = Puzzle::try_from(response).unwrap();
+        let mut position = puzzle.position.clone();
+        let mut continuation_moves = puzzle
+            .moves
+            .iter()
+            .map(|move_| move_.parse::<Uci>().unwrap());
+
+        let first_move = next_continuation_move(&mut continuation_moves, &position).unwrap();
+        position = position.play(&first_move).unwrap();
+        let response = next_continuation_move(&mut continuation_moves, &position).unwrap();
+        position = position.play(&response).unwrap();
+
+        assert!(next_continuation_move(&mut continuation_moves, &position).is_none());
+    }
+
+    #[test]
+    fn puzzle_input_accepts_madra_object() {
+        let puzzles = parse_puzzles(&madra_json("madra-1"));
+
+        assert_eq!(puzzles[0].id, "madra-1");
+        assert_eq!(puzzles[0].moves, vec!["e7e5".to_string()]);
+        assert_eq!(puzzles[0].position.turn(), Color::Black);
+        assert_eq!(puzzles[0].tags, vec!["opening".to_string()]);
+    }
+
+    #[test]
+    fn puzzle_input_accepts_lichess_response_object() {
+        let puzzles = parse_puzzles(&lichess_response_json("zZG03"));
+
+        assert_eq!(puzzles[0].id, "zZG03");
+        assert_eq!(
+            puzzles[0].moves,
+            vec!["c1h1".to_string(), "h2g3".to_string()]
+        );
+        assert_eq!(puzzles[0].position.turn(), Color::Black);
+        assert_eq!(
+            puzzles[0].tags,
+            vec!["endgame".to_string(), "fork".to_string()]
+        );
+    }
+
+    #[test]
+    fn puzzle_input_accepts_lichess_puzzle_object() {
+        let puzzles = parse_puzzles(&lichess_puzzle_json("zZG03"));
+
+        assert_eq!(puzzles[0].id, "zZG03");
+        assert_eq!(
+            puzzles[0].moves,
+            vec!["c1h1".to_string(), "h2g3".to_string()]
+        );
+    }
+
+    #[test]
+    fn puzzle_input_accepts_json_array() {
+        let input = format!(
+            "[{}, {}]",
+            madra_json("madra-1"),
+            lichess_response_json("zZG03")
+        );
+        let puzzles = parse_puzzles(&input);
+
+        assert_eq!(puzzles[0].id, "madra-1");
+        assert_eq!(puzzles[1].id, "zZG03");
+    }
+
+    #[test]
+    fn read_puzzles_accepts_json_lines() {
+        let path = temp_log_path("puzzle-input");
+        let _ = fs::remove_file(&path);
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                json_line(madra_json("madra-1")),
+                json_line(lichess_response_json("zZG03"))
+            ),
+        )
+        .unwrap();
+
+        let puzzles = read_puzzles(&path).unwrap();
+
+        assert_eq!(puzzles[0].id, "madra-1");
+        assert_eq!(puzzles[1].id, "zZG03");
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
